@@ -34,6 +34,11 @@ class TransactionCreate(TransactionBase):
     fx_rate_used: Optional[Decimal] = None
     effective_bill_date: Optional[_Date] = None
     splits: Optional[TransactionSplitsInput] = None
+    # Installment metadata — optional for manual creation on CC accounts.
+    installment_number: Optional[int] = None
+    total_installments: Optional[int] = None
+    installment_total_amount: Optional[Decimal] = None
+    installment_purchase_date: Optional[_Date] = None
 
 
 class TransactionUpdate(BaseModel):
@@ -56,6 +61,25 @@ class TransactionUpdate(BaseModel):
     # When provided, replaces the transaction's splits wholesale. Pass
     # an object with an empty `splits` list to clear them.
     splits: Optional[TransactionSplitsInput] = None
+    # Installment metadata — editable on CC accounts.
+    installment_number: Optional[int] = None
+    total_installments: Optional[int] = None
+    installment_total_amount: Optional[Decimal] = None
+    installment_purchase_date: Optional[_Date] = None
+
+
+class InstallmentPlanCreate(BaseModel):
+    """Bulk-create N installment transactions for a credit-card purchase."""
+    account_id: uuid.UUID
+    description: str
+    total_amount: Decimal = Field(gt=0)
+    num_installments: int = Field(ge=2, le=60)
+    purchase_date: _Date
+    category_id: Optional[uuid.UUID] = None
+    payee_id: Optional[uuid.UUID] = None
+    currency: Optional[str] = None
+    notes: Optional[str] = None
+    effective_bill_date: Optional[_Date] = None
 
 
 class TransactionRead(TransactionBase):
@@ -96,6 +120,9 @@ class TransactionRead(TransactionBase):
     # instead of a generic "shared" badge.
     parent_owner_name: Optional[str] = None
     is_ignored: bool = False
+    # MacroDroid webhook metadata
+    sender: Optional[str] = None
+    source_app: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
 

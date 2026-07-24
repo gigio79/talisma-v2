@@ -460,6 +460,21 @@ export const transactions = {
     const { data } = await api.post('/transactions', transaction)
     return data
   },
+  createInstallments: async (plan: {
+    account_id: string
+    description: string
+    total_amount: number
+    num_installments: number
+    purchase_date: string
+    category_id?: string | null
+    payee_id?: string | null
+    currency?: string
+    notes?: string
+    effective_bill_date?: string | null
+  }): Promise<Transaction[]> => {
+    const { data } = await api.post('/transactions/installments', plan)
+    return data
+  },
   update: async (
     id: string,
     transaction: Partial<Transaction> & { apply_to_transfer_pair?: boolean },

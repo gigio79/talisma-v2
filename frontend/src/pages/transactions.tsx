@@ -465,6 +465,40 @@ export default function TransactionsPage() {
     },
   })
 
+  const createInstallmentsMutation = useMutation({
+    mutationFn: async (payload: {
+      plan: {
+        account_id: string
+        description: string
+        total_amount: number
+        num_installments: number
+        purchase_date: string
+        category_id?: string | null
+        payee_id?: string | null
+        currency?: string
+        notes?: string
+        effective_bill_date?: string | null
+      }
+      pendingFiles?: File[]
+    }) => {
+      const created = await transactions.createInstallments(payload.plan)
+      if (payload.pendingFiles?.length && created.length > 0) {
+        await Promise.all(
+          payload.pendingFiles.map(file => transactions.attachments.upload(created[0].id, file))
+        )
+      }
+      return created
+    },
+    onSuccess: (created) => {
+      invalidateAfterTxMutation()
+      toast.success(t('transactions.created'))
+      setDialogOpen(false)
+    },
+    onError: (error) => {
+      toast.error(extractApiError(error))
+    },
+  })
+
   const updateMutation = useMutation({
     mutationFn: ({ id, ...data }: TransactionUpdatePayload & { id: string }) =>
       transactions.update(id, data),
@@ -768,6 +802,24 @@ export default function TransactionsPage() {
     updateMutation.mutate({ id: editingTx.id, ...data })
   }
 
+  const handleCreateInstallments = (
+    plan: {
+      account_id: string
+      description: string
+      total_amount: number
+      num_installments: number
+      purchase_date: string
+      category_id?: string | null
+      payee_id?: string | null
+      currency?: string
+      notes?: string
+      effective_bill_date?: string | null
+    },
+    pendingFiles?: File[],
+  ) => {
+    createInstallmentsMutation.mutate({ plan, pendingFiles })
+  }
+
   // Open the Add Transaction dialog seeded from an existing row's
   // fields (issue #158). Identity-bearing fields (id, transfer_pair,
   // installment series, splits) are dropped so the dialog treats the
@@ -932,9 +984,9 @@ export default function TransactionsPage() {
     return (
       <div className="flex items-center gap-2 md:gap-3">
         <CategoryIcon icon={tx.category?.icon} color={tx.category?.color} size="lg" />
-        <div className="min-w-0 flex-1">
+        <div className="min-w-0 flex-1 overflow-hidden">
           <div className="flex items-center gap-2">
-            <p className="text-sm font-semibold text-foreground truncate">{tx.description}</p>
+            <p className="text-sm font-semibold text-foreground line-clamp-1">{tx.description}</p>
             {tx.group_id && (
               <span
                 className="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-violet-700 bg-violet-50 border border-violet-200 dark:bg-violet-950/40 dark:text-violet-300 dark:border-violet-900 px-1.5 py-0.5 rounded-full"
@@ -995,7 +1047,7 @@ export default function TransactionsPage() {
           {(showInlineNotes || showInlineTags) && tx.notes && (
             <div className="mt-1 space-y-0.5">
               {showInlineNotes && noteText && (
-                <p className="text-xs text-muted-foreground italic leading-snug">{noteText}</p>
+                <p className="text-xs text-muted-foreground italic leading-snug line-clamp-2">{noteText}</p>
               )}
               {showInlineTags && noteTags.length > 0 && (
                 <div className="flex flex-wrap gap-1">
@@ -1030,7 +1082,7 @@ export default function TransactionsPage() {
         )
       case 'description':
         return (
-          <TableCell key={col.id} style={widthStyle} className={`${baseClass} pl-2 max-w-0`}>
+          <TableCell key={col.id} style={widthStyle} className={`${baseClass} pl-2 max-w-0 overflow-hidden whitespace-normal`}>
             {renderDescriptionCell(tx)}
           </TableCell>
         )
@@ -1074,7 +1126,7 @@ export default function TransactionsPage() {
       case 'notes': {
         const text = tx.notes ? stripHashtags(tx.notes) : ''
         return (
-          <TableCell key={col.id} style={widthStyle} className={`${baseClass} text-xs text-muted-foreground italic max-w-0 truncate`}>
+          <TableCell key={col.id} style={widthStyle} className={`${baseClass} text-xs text-muted-foreground italic max-w-0 overflow-hidden whitespace-normal line-clamp-2`}>
             {text || <span className="not-italic">—</span>}
           </TableCell>
         )
@@ -1724,6 +1776,7 @@ export default function TransactionsPage() {
           // Drop any prior mutation error so reopening the dialog
           // doesn't surface a stale message (issue #155).
           createMutation.reset()
+          createInstallmentsMutation.reset()
           updateMutation.reset()
         }}
         transaction={editingTx}
@@ -1734,6 +1787,7 @@ export default function TransactionsPage() {
         accounts={accountsList ?? []}
         recurringMatch={editingTx ? recurringList?.find(r => r.description === editingTx.description && r.type === editingTx.type) : undefined}
         onSave={handleTransactionSave}
+        onCreateInstallments={handleCreateInstallments}
         onDelete={editingTx ? () => deleteMutation.mutate(editingTx.id) : undefined}
         onUnlinkTransfer={(pairId) => unlinkTransferMutation.mutate(pairId)}
         onIgnoreChanged={invalidateAfterTxMutation}
@@ -1742,8 +1796,8 @@ export default function TransactionsPage() {
           setEditingTx(null)
           handleCreateRuleFromTransaction(tx)
         }}
-        loading={createMutation.isPending || updateMutation.isPending || deleteMutation.isPending || unlinkTransferMutation.isPending}
-        error={createMutation.error || updateMutation.error ? extractApiError(createMutation.error || updateMutation.error) : null}
+        loading={createMutation.isPending || createInstallmentsMutation.isPending || updateMutation.isPending || deleteMutation.isPending || unlinkTransferMutation.isPending}
+        error={createMutation.error || createInstallmentsMutation.error || updateMutation.error ? extractApiError(createMutation.error || createInstallmentsMutation.error || updateMutation.error) : null}
         isSynced={editingTx?.source === 'sync'}
       />
 

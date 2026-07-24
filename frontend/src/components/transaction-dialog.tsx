@@ -109,6 +109,18 @@ export function TransactionDialog({
   accounts: { id: string; name: string; type?: string }[]
   recurringMatch?: RecurringTransaction
   onSave: (data: Partial<Transaction>, recurringData?: { frequency: string; end_date?: string }, pendingFiles?: File[], action?: SaveAction) => void
+  onCreateInstallments?: (plan: {
+    account_id: string
+    description: string
+    total_amount: number
+    num_installments: number
+    purchase_date: string
+    category_id?: string | null
+    payee_id?: string | null
+    currency?: string
+    notes?: string
+    effective_bill_date?: string | null
+  }, pendingFiles?: File[]) => void
   onDelete?: () => void
   onUnlinkTransfer?: (pairId: string) => void
   onIgnoreChanged?: () => void
@@ -188,6 +200,7 @@ export function TransactionDialog({
               accounts={accounts}
               recurringMatch={recurringMatch}
               onSave={onSave}
+              onCreateInstallments={onCreateInstallments}
               onDelete={onDelete}
               onUnlinkTransfer={onUnlinkTransfer}
               onIgnoreChanged={onIgnoreChanged}
@@ -325,6 +338,18 @@ function TransactionForm({
   accounts: { id: string; name: string; type?: string }[]
   recurringMatch?: RecurringTransaction
   onSave: (data: Partial<Transaction>, recurringData?: { frequency: string; end_date?: string }, pendingFiles?: File[], action?: SaveAction) => void
+  onCreateInstallments?: (plan: {
+    account_id: string
+    description: string
+    total_amount: number
+    num_installments: number
+    purchase_date: string
+    category_id?: string | null
+    payee_id?: string | null
+    currency?: string
+    notes?: string
+    effective_bill_date?: string | null
+  }, pendingFiles?: File[]) => void
   onDelete?: () => void
   onUnlinkTransfer?: (pairId: string) => void
   onIgnoreChanged?: () => void
@@ -362,6 +387,7 @@ function TransactionForm({
   const [payeeId, setPayeeId] = useState(seed?.payee_id ?? '')
   const [accountId, setAccountId] = useState(seed?.account_id ?? accounts[0]?.id ?? '')
   const [notes, setNotes] = useState(seed?.notes ?? '')
+  const [notesFocused, setNotesFocused] = useState(false)
   // Manual CC bucketing override (issue #92). Empty = auto. Visible only
   // when the selected account is a credit card.
   const [effectiveBillDate, setEffectiveBillDate] = useState(seed?.effective_bill_date ?? '')
@@ -377,6 +403,11 @@ function TransactionForm({
   const [isRecurring, setIsRecurring] = useState(false)
   const [frequency, setFrequency] = useState<'monthly' | 'weekly' | 'yearly'>('monthly')
   const [endDate, setEndDate] = useState('')
+  // Installment plan state — only shown for CC accounts when creating.
+  const [isInstallment, setIsInstallment] = useState(false)
+  const [installmentTotal, setInstallmentTotal] = useState('')
+  const [installmentCount, setInstallmentCount] = useState('')
+  const [installmentPurchaseDate, setInstallmentPurchaseDate] = useState('')
   // Optional split-with-group payload. `null` = leave splits as-is on
   // update, or no splits on create. The dedicated section component
   // owns its own UI state and surfaces a normalized payload here.
@@ -669,6 +700,25 @@ function TransactionForm({
         const recurringData = isCreating && isRecurring
           ? { frequency, end_date: endDate || undefined }
           : undefined
+        // Installment plan: intercept submit and call the dedicated bulk creator.
+        if (isCreating && isInstallment && isCcSelected && onCreateInstallments) {
+          const total = parseFloat(installmentTotal)
+          const count = parseInt(installmentCount, 10)
+          if (!total || total <= 0 || !count || count < 2) return
+          onCreateInstallments({
+            account_id: accountId,
+            description,
+            total_amount: total,
+            num_installments: count,
+            purchase_date: installmentPurchaseDate || date,
+            category_id: categoryId || null,
+            payee_id: payeeId || null,
+            currency,
+            notes: notes.trim() || null,
+            effective_bill_date: effectiveBillDate || null,
+          }, isCreating && pendingFiles.length > 0 ? pendingFiles : undefined)
+          return
+        }
         onSave(txData, recurringData, isCreating && pendingFiles.length > 0 ? pendingFiles : undefined, action)
       }}
       className={cn(
@@ -929,8 +979,15 @@ function TransactionForm({
           rows={2}
           value={notes}
           onChange={(e) => setNotes(e.target.value)}
+          onFocus={() => setNotesFocused(true)}
+          onBlur={() => setNotesFocused(false)}
           placeholder={t('transactions.notesPlaceholder')}
         />
+        {notes === 'Auto-created from MacroDroid:' && (
+          <p className={`text-xs italic text-muted-foreground/60 transition-opacity duration-200 ${notesFocused ? 'opacity-0 h-0 overflow-hidden' : 'opacity-100'}`}>
+            ex: compra de peças pro carro
+          </p>
+        )}
       </div>
 
       {/* Manual bill-cycle override (issue #92). CC accounts only. Empty
@@ -965,6 +1022,76 @@ function TransactionForm({
                 </button>
               )}
             </div>
+          </div>
+        )
+      })()}
+
+      {/* Installment plan — CC accounts only, create mode. Lets the user
+          bulk-create N transactions with installment metadata in one go. */}
+      {isCreating && !isSynced && (() => {
+        const selectedAcc = accounts.find(a => a.id === accountId)
+        if (selectedAcc?.type !== 'credit_card') return null
+        const total = parseFloat(installmentTotal) || 0
+        const count = parseInt(installmentCount, 10) || 0
+        const perParcela = total && count >= 2 ? (total / count) : 0
+        return (
+          <div className="space-y-3 border rounded-md p-3">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={isInstallment}
+                onChange={(e) => setIsInstallment(e.target.checked)}
+                className="rounded border-gray-300"
+              />
+              <span className="text-sm font-medium">{t('transactions.installmentPlan', 'Plano de parcelamento')}</span>
+            </label>
+            {isInstallment && (
+              <div className="space-y-3 pt-1">
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label>{t('transactions.installmentTotal', 'Valor total')}</Label>
+                    <Input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      value={installmentTotal}
+                      onChange={(e) => setInstallmentTotal(e.target.value)}
+                      placeholder="0.00"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>{t('transactions.installmentCount', 'Parcelas')}</Label>
+                    <Input
+                      type="number"
+                      min="2"
+                      max="60"
+                      value={installmentCount}
+                      onChange={(e) => setInstallmentCount(e.target.value)}
+                      placeholder="12"
+                    />
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <Label>{t('transactions.installmentPurchaseDate', 'Data da compra')}</Label>
+                  <DatePickerInput
+                    value={installmentPurchaseDate}
+                    onChange={setInstallmentPurchaseDate}
+                    placeholder={t('transactions.installmentPurchaseDatePlaceholder', 'Data original da compra')}
+                    className="w-full justify-start"
+                  />
+                </div>
+                {perParcela > 0 && count >= 2 && (
+                  <p className="text-xs text-muted-foreground">
+                    {t('transactions.installmentPreview', {
+                      count,
+                      perParcela: perParcela.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+                      total: total.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+                      defaultValue: `${count}x de ${perParcela.toFixed(2)} = ${total.toFixed(2)}`,
+                    })}
+                  </p>
+                )}
+              </div>
+            )}
           </div>
         )
       })()}

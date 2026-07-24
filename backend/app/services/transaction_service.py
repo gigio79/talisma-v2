@@ -15,7 +15,7 @@ from app.models.bank_connection import BankConnection
 from app.models.category import Category
 from app.models.group import Group, GroupMember
 from app.models.payee import Payee
-from app.schemas.transaction import TransactionCreate, TransactionUpdate, TransferCreate
+from app.schemas.transaction import InstallmentPlanCreate, TransactionCreate, TransactionUpdate, TransferCreate
 from app.schemas.transaction_split import TransactionSplitInput, TransactionSplitsInput
 from app.services import split_service
 from app.services.credit_card_service import apply_effective_date
@@ -667,6 +667,10 @@ async def create_transaction(
         type=data.type,
         source="manual",
         notes=data.notes,
+        installment_number=data.installment_number,
+        total_installments=data.total_installments,
+        installment_total_amount=data.installment_total_amount,
+        installment_purchase_date=data.installment_purchase_date,
     )
     apply_effective_date(transaction, account)
     session.add(transaction)
@@ -688,6 +692,95 @@ async def create_transaction(
     await session.commit()
     await session.refresh(transaction, ["category", "splits"])
     return transaction
+
+
+def _add_months(start: date, months: int) -> date:
+    """Add *months* to *start*, clamping the day to the last day of the target month."""
+    import calendar
+
+    total_months = start.month - 1 + months
+    year = start.year + total_months // 12
+    month = total_months % 12 + 1
+    last_day = calendar.monthrange(year, month)[1]
+    return date(year, month, min(start.day, last_day))
+
+
+async def create_installment_plan(
+    session: AsyncSession,
+    workspace_id: uuid.UUID,
+    user_id: uuid.UUID,
+    data: InstallmentPlanCreate,
+) -> list[Transaction]:
+    """Bulk-create *num_installments* transactions for a credit-card purchase.
+
+    Each transaction carries full installment metadata so the UI can display
+    badges like ``3/12``.  The last parcela absorbs any rounding remainder so
+    the total always matches ``total_amount`` exactly.
+    """
+    account_result = await session.execute(
+        select(Account)
+        .outerjoin(BankConnection)
+        .where(
+            Account.id == data.account_id,
+            or_(
+                Account.workspace_id == workspace_id,
+                BankConnection.workspace_id == workspace_id,
+            ),
+        )
+    )
+    account = account_result.scalar_one_or_none()
+    if not account:
+        raise ValueError("Account not found")
+    if account.type != "credit_card":
+        raise ValueError("Installment plans require a credit-card account")
+
+    currency = data.currency or account.currency
+    n = data.num_installments
+    total = data.total_amount
+    parcela = (total / n).quantize(Decimal("0.01"))
+    transactions: list[Transaction] = []
+
+    for i in range(1, n + 1):
+        tx_date = _add_months(data.purchase_date, i - 1)
+        # Last parcela absorbs rounding remainder.
+        amount = total - parcela * (n - 1) if i == n else parcela
+
+        tx = Transaction(
+            user_id=user_id,
+            workspace_id=workspace_id,
+            account_id=data.account_id,
+            category_id=data.category_id,
+            payee_id=data.payee_id,
+            description=data.description,
+            amount=amount,
+            currency=currency,
+            date=tx_date,
+            type="debit",
+            source="manual",
+            notes=data.notes,
+            installment_number=i,
+            total_installments=n,
+            installment_total_amount=total,
+            installment_purchase_date=data.purchase_date,
+        )
+        if data.effective_bill_date:
+            tx.effective_bill_date = data.effective_bill_date
+        apply_effective_date(tx, account)
+        session.add(tx)
+        transactions.append(tx)
+
+    await session.flush()
+
+    # Apply rules and stamp primary amounts for each transaction.
+    for tx in transactions:
+        if not data.category_id:
+            await apply_rules_to_transaction(session, user_id, tx)
+        await stamp_primary_amount(session, user_id, tx)
+
+    await session.commit()
+    for tx in transactions:
+        await session.refresh(tx, ["category"])
+    return transactions
 
 
 async def create_transfer(

@@ -15,7 +15,7 @@ from app.core.workspace_context import (
     current_workspace,
     current_writable_workspace,
 )
-from app.schemas.transaction import BulkAddToGroupRequest, BulkCategorizeRequest, BulkTagsRequest, CreateCounterpartRequest, LinkTransferRequest, TransactionCreate, TransactionRead, TransactionUpdate, TransferCreate, TransferRead
+from app.schemas.transaction import BulkAddToGroupRequest, BulkCategorizeRequest, BulkTagsRequest, CreateCounterpartRequest, InstallmentPlanCreate, LinkTransferRequest, TransactionCreate, TransactionRead, TransactionUpdate, TransferCreate, TransferRead
 from app.services import transaction_service
 from app.services.admin_service import get_credit_card_accounting_mode
 
@@ -361,6 +361,25 @@ async def get_transaction(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Transaction not found")
     primary_currency = ctx.user.primary_currency
     return _tag_fx_fallback(TransactionRead.model_validate(transaction, from_attributes=True), primary_currency)
+
+
+@router.post("/installments", response_model=list[TransactionRead], status_code=status.HTTP_201_CREATED)
+async def create_installment_plan(
+    data: InstallmentPlanCreate,
+    ctx: WorkspaceContext = Depends(current_writable_workspace),
+    session: AsyncSession = Depends(get_async_session),
+):
+    try:
+        transactions = await transaction_service.create_installment_plan(
+            session, ctx.workspace.id, ctx.user_id, data
+        )
+        primary_currency = ctx.user.primary_currency
+        return [
+            _tag_fx_fallback(TransactionRead.model_validate(tx, from_attributes=True), primary_currency)
+            for tx in transactions
+        ]
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
 
 @router.post("", response_model=TransactionRead, status_code=status.HTTP_201_CREATED)
