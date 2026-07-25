@@ -779,7 +779,7 @@ async def create_installment_plan(
 
     await session.commit()
     for tx in transactions:
-        await session.refresh(tx, ["category"])
+        await session.refresh(tx, ["category", "splits"])
     return transactions
 
 

@@ -7,7 +7,6 @@ import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.account import Account
-from app.models.transaction import Transaction
 from app.schemas.transaction import InstallmentPlanCreate, TransactionCreate
 from app.services.transaction_service import (
     create_installment_plan,
@@ -278,9 +277,8 @@ async def test_installments_api_rejects_non_cc(
         balance=Decimal("5000.00"),
         currency="BRL",
     )
-    sessionmaker = type(client)._session_maker  # type: ignore
-    from app.core.database import async_session_maker
-    async with async_session_maker() as session:
+    from tests.conftest import TestSessionLocal
+    async with TestSessionLocal() as session:
         session.add(checking)
         await session.commit()
 
