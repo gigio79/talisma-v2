@@ -112,10 +112,16 @@ class Settings(BaseSettings):
     # Brazilian Treasury bond prices (official Tesouro Transparente CSV).
     # On by default since most users are Brazilian; the official CSV is only
     # fetched when someone actually searches a bond, and the UI pre-warm is
-    # gated to Brazilian users, so non-Brazilian installs pay ~zero cost.
+    # gated to Brazilian users so non-Brazilian installs pay ~zero cost.
     # Set TESOURO_DIRETO_ENABLED=false to fully disable (e.g. to avoid the
     # external dependency on the Brazilian government endpoint).
     tesouro_direto_enabled: bool = True
+
+    # MacroDroid webhook — API key for authenticating incoming notifications.
+    # When set, the /api/webhooks/macrodroid endpoint requires this key in
+    # the Authorization header (Bearer <key>). Leave empty to disable auth
+    # (not recommended for production).
+    macrodroid_webhook_secret: str = ""
 
     model_config = SettingsConfigDict(env_file=".env", secrets_dir=CREDENTIALS_DIRECTORY)
 

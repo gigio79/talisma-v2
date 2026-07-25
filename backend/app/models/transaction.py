@@ -90,6 +90,9 @@ class Transaction(Base):
         nullable=True,
         index=True,
     )
+    # MacroDroid webhook fields — who triggered the notification and which app
+    sender: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    source_app: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     account: Mapped["Account"] = relationship(back_populates="transactions")
