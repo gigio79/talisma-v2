@@ -4,15 +4,9 @@ import path from 'node:path'
 import { defineConfig, loadEnv } from 'vite'
 import { resolveAppVersion } from './build/version'
 
-function getFrontendHost(frontendUrl?: string) {
-  if (!frontendUrl) return []
-  const withoutProto = frontendUrl.replace(/^https?:\/\//, '')
-  return [withoutProto.split(/[:/]/)[0]]
-}
-
+// @ts-expect-error — Vite 7 defineConfig type doesn't expose the async overload in tsc -b
 export default defineConfig(async ({ mode }) => {
   const env = loadEnv(mode, __dirname, '')
-  const frontendUrl = env.FRONTEND_URL || process.env.FRONTEND_URL
   const backendUrl = env.BACKEND_URL || process.env.BACKEND_URL
   const appVersionRoot = env.APP_VERSION_ROOT || process.env.APP_VERSION_ROOT
   const appVersion = await resolveAppVersion(
@@ -42,7 +36,7 @@ export default defineConfig(async ({ mode }) => {
     server: {
       port: 5173,
       host: '0.0.0.0',
-      allowedHosts: getFrontendHost(frontendUrl),
+      allowedHosts: true,
       proxy: {
         '/api': {
           target: backendUrl ?? 'http://localhost:8000',
