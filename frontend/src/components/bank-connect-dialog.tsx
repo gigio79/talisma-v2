@@ -7,6 +7,7 @@ import { invalidateFinancialQueries } from '@/lib/invalidate-queries'
 import { toast } from 'sonner'
 import {
   Dialog,
+  DialogBody,
   DialogContent,
   DialogFooter,
   DialogHeader,
@@ -99,25 +100,27 @@ export function BankConnectDialog({
   if (open && needsInitialOptions && !optionsConfirmed) {
     return (
       <Dialog open={open} onOpenChange={(v) => !v && handleClose()}>
-        <DialogContent className="sm:max-w-md">
+        <DialogContent className="flex max-h-[90vh] flex-col overflow-hidden">
           <DialogHeader>
             <DialogTitle>{t('connections.initialSyncSettings')}</DialogTitle>
             <p className="text-sm text-muted-foreground">{t('connections.initialSyncSettingsDesc')}</p>
           </DialogHeader>
-          <div className="flex items-start justify-between gap-4 rounded-lg border border-border p-3">
-            <div className="space-y-1">
-              <Label htmlFor="initial-sync-assets">{t('connections.syncAssets')}</Label>
-              <p className="text-xs text-muted-foreground">{t('connections.syncAssetsHint')}</p>
+          <DialogBody className="pr-1">
+            <div className="flex items-start justify-between gap-4 rounded-lg border border-border p-3">
+              <div className="space-y-1">
+                <Label htmlFor="initial-sync-assets">{t('connections.syncAssets')}</Label>
+                <p className="text-xs text-muted-foreground">{t('connections.syncAssetsHint')}</p>
+              </div>
+              <input
+                id="initial-sync-assets"
+                type="checkbox"
+                checked={syncAssets}
+                onChange={(e) => setSyncAssets(e.target.checked)}
+                className="mt-1 h-4 w-4 rounded border-border text-primary focus:ring-primary"
+              />
             </div>
-            <input
-              id="initial-sync-assets"
-              type="checkbox"
-              checked={syncAssets}
-              onChange={(e) => setSyncAssets(e.target.checked)}
-              className="mt-1 h-4 w-4 rounded border-border text-primary focus:ring-primary"
-            />
-          </div>
-          <DialogFooter>
+          </DialogBody>
+          <DialogFooter className="shrink-0 pt-4">
             <Button variant="outline" onClick={handleClose}>{t('common.cancel')}</Button>
             <Button onClick={() => setOptionsConfirmed(true)}>{t('connections.continueToConnector')}</Button>
           </DialogFooter>

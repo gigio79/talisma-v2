@@ -11,6 +11,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
   Dialog,
+  DialogBody,
   DialogContent,
   DialogHeader,
   DialogTitle,
@@ -241,7 +242,7 @@ function RecurringTab() {
       </SectionCard>
 
       <Dialog open={dialogOpen} onOpenChange={() => { setDialogOpen(false); setEditing(null) }}>
-        <DialogContent>
+        <DialogContent className="flex max-h-[90vh] flex-col overflow-hidden">
           <DialogHeader>
             <DialogTitle>{editing ? t('recurring.edit') : t('recurring.add')}</DialogTitle>
           </DialogHeader>
@@ -326,8 +327,9 @@ function RecurringForm({
           auto_generate: autoGenerate,
         } as Partial<RecurringTransaction>)
       }}
-      className="space-y-4"
+      className="flex min-h-0 flex-1 flex-col"
     >
+      <DialogBody className="space-y-4 pr-1">
       <div className="space-y-2">
         <Label>{t('recurring.description')}</Label>
         <Input value={description} onChange={(e) => setDescription(e.target.value)} required />
@@ -429,7 +431,8 @@ function RecurringForm({
           <span className="text-sm text-foreground">{t('recurring.active')}</span>
         </label>
       )}
-      <DialogFooter>
+      </DialogBody>
+      <DialogFooter className="shrink-0 pt-4">
         <Button type="button" variant="outline" onClick={onCancel}>{t('common.cancel')}</Button>
         <Button type="submit" disabled={loading}>
           {loading ? t('common.loading') : t('common.save')}

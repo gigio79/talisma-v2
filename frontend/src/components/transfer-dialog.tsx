@@ -7,6 +7,7 @@ import { Label } from '@/components/ui/label'
 import { DatePickerInput } from '@/components/ui/date-picker-input'
 import {
   Dialog,
+  DialogBody,
   DialogContent,
   DialogHeader,
   DialogTitle,
@@ -101,7 +102,7 @@ export function TransferDialog({
 
   return (
     <Dialog open={open} onOpenChange={onClose}>
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent className="sm:max-w-lg flex max-h-[90vh] flex-col overflow-hidden">
         <DialogHeader>
           <DialogTitle>{t('transactions.transferTitle')}</DialogTitle>
         </DialogHeader>
@@ -118,8 +119,9 @@ export function TransferDialog({
               fx_rate: isCrossCurrency && fxRate ? parseFloat(fxRate) : undefined,
             })
           }}
-          className="space-y-4"
+          className="flex min-h-0 flex-1 flex-col"
         >
+          <DialogBody className="space-y-4 pr-1">
           <div className="grid grid-cols-[1fr,auto,1fr] items-end gap-2">
             <div className="space-y-2">
               <Label>{t('transactions.transferFromAccount')}</Label>
@@ -261,8 +263,9 @@ export function TransferDialog({
               onChange={(e) => setNotes(e.target.value)}
             />
           </div>
+          </DialogBody>
 
-          <DialogFooter>
+          <DialogFooter className="shrink-0 pt-4">
             <Button type="button" variant="outline" onClick={onClose}>
               {t('common.cancel')}
             </Button>

@@ -5,6 +5,7 @@ import { connections } from '@/lib/api'
 import { toast } from 'sonner'
 import {
   Dialog,
+  DialogBody,
   DialogContent,
   DialogHeader,
   DialogTitle,
@@ -66,11 +67,11 @@ export function ConnectionSettingsDialog({
 
   return (
     <Dialog open={open} onOpenChange={onClose}>
-      <DialogContent>
+      <DialogContent className="flex max-h-[90vh] flex-col overflow-hidden">
         <DialogHeader>
           <DialogTitle>{t('connections.settings')}</DialogTitle>
         </DialogHeader>
-        <div className="space-y-4">
+        <DialogBody className="space-y-4 pr-1">
           <div className="space-y-2">
             <Label htmlFor="connection-display-name">{t('connections.displayName')}</Label>
             <Input
@@ -121,8 +122,8 @@ export function ConnectionSettingsDialog({
               />
             </div>
           )}
-        </div>
-        <DialogFooter>
+        </DialogBody>
+        <DialogFooter className="shrink-0 pt-4">
           <Button variant="outline" onClick={onClose}>
             {t('common.cancel')}
           </Button>

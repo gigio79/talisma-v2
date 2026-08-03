@@ -7,6 +7,7 @@ import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
+  DialogBody,
   DialogContent,
   DialogFooter,
   DialogHeader,
@@ -125,11 +126,11 @@ export function AgentFormDialog({ open, onOpenChange, agent }: Props) {
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-xl">
+      <DialogContent className="max-w-xl flex max-h-[90vh] flex-col overflow-hidden">
         <DialogHeader>
           <DialogTitle>{isEdit ? t('agents.form.editTitle') : t('agents.form.createTitle')}</DialogTitle>
         </DialogHeader>
-        <div className="grid gap-4 py-2">
+        <DialogBody className="grid gap-4 py-2 pr-1">
           <div className="grid gap-2">
             <Label htmlFor="agent-name">{t('agents.form.name')}</Label>
             <Input id="agent-name" value={name} onChange={(e) => setName(e.target.value)} placeholder={t('agents.form.namePlaceholder')} />
@@ -256,8 +257,8 @@ export function AgentFormDialog({ open, onOpenChange, agent }: Props) {
               </p>
             </div>
           </div>
-        </div>
-        <DialogFooter>
+        </DialogBody>
+        <DialogFooter className="shrink-0 pt-4">
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             {t('agents.form.cancel')}
           </Button>

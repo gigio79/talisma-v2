@@ -11,6 +11,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
   Dialog,
+  DialogBody,
   DialogContent,
   DialogHeader,
   DialogTitle,
@@ -427,7 +428,7 @@ export default function GoalsPage() {
 
       {/* Create/Edit Dialog */}
       <Dialog open={dialogOpen} onOpenChange={() => { setDialogOpen(false); setEditing(null) }}>
-        <DialogContent>
+        <DialogContent className="flex max-h-[90vh] flex-col overflow-hidden">
           <DialogHeader>
             <DialogTitle>{editing ? t('goals.edit') : t('goals.add')}</DialogTitle>
           </DialogHeader>
@@ -466,8 +467,9 @@ export default function GoalsPage() {
                 createMutation.mutate(payload as Partial<Goal>)
               }
             }}
-            className="space-y-4"
+            className="flex min-h-0 flex-1 flex-col"
           >
+            <DialogBody className="space-y-4 pr-1">
             <div className="space-y-2">
               <Label>{t('goals.name')}</Label>
               <Input name="name" defaultValue={editing?.name ?? ''} required />
@@ -617,7 +619,8 @@ export default function GoalsPage() {
               </Popover>
             </div>
 
-            <DialogFooter>
+            </DialogBody>
+            <DialogFooter className="shrink-0 pt-4">
               <Button type="button" variant="outline" onClick={() => { setDialogOpen(false); setEditing(null) }}>
                 {t('common.cancel')}
               </Button>

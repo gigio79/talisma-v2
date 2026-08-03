@@ -29,6 +29,7 @@ import {
 } from '@/components/ui/select'
 import {
   Dialog,
+  DialogBody,
   DialogContent,
   DialogDescription,
   DialogFooter,
@@ -545,12 +546,12 @@ export default function WorkspaceSettingsPage() {
 
       {/* Invite dialog */}
       <Dialog open={inviteOpen} onOpenChange={setInviteOpen}>
-        <DialogContent>
+        <DialogContent className="flex max-h-[90vh] flex-col overflow-hidden">
           <DialogHeader>
             <DialogTitle>{t('workspace.addMemberTitle')}</DialogTitle>
             <DialogDescription>{t('workspace.addMemberDescription')}</DialogDescription>
           </DialogHeader>
-          <div className="space-y-4 py-1">
+          <DialogBody className="space-y-4 py-1 pr-1">
             <div className="space-y-1.5">
               <Label htmlFor="invite-email" className="text-[13px]">
                 {t('admin.users.email', 'Email')}
@@ -598,8 +599,8 @@ export default function WorkspaceSettingsPage() {
                 {t('workspace.passwordHint')}
               </p>
             </div>
-          </div>
-          <DialogFooter>
+          </DialogBody>
+          <DialogFooter className="shrink-0 pt-4">
             <Button
               variant="outline"
               onClick={() => setInviteOpen(false)}
