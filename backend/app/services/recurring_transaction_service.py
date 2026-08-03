@@ -93,6 +93,15 @@ async def create_recurring_transaction(
     )
     await session.commit()
     await session.refresh(recurring)
+
+    # Generate the initial transaction if auto_generate is on and the first
+    # occurrence is already due (Bug fix: recurring page didn't create the
+    # initial transaction in the Transactions tab).
+    if data.auto_generate:
+        await generate_pending(session, user_id)
+        await session.commit()
+        await session.refresh(recurring)
+
     return recurring
 
 
@@ -116,6 +125,29 @@ async def update_recurring_transaction(
 
     for key, value in update_data.items():
         setattr(recurring, key, value)
+
+    # Recalculate next_occurrence when scheduling fields change (Bug fix:
+    # editing start_date/frequency/day_of_month didn't update the "Próxima"
+    # column in the recurring list).
+    #
+    # When recurrences already generated transactions, reset to start_date
+    # would re-generate duplicates. Instead, find the latest existing linked
+    # transaction and advance past it.
+    if any(k in update_data for k in ("start_date", "frequency", "day_of_month")):
+        latest_tx_result = await session.execute(
+            select(Transaction.date)
+            .where(Transaction.recurring_transaction_id == recurring.id)
+            .order_by(Transaction.date.desc())
+            .limit(1)
+        )
+        latest_tx_date = latest_tx_result.scalar_one_or_none()
+        if latest_tx_date is not None:
+            intended_day = recurring.day_of_month or recurring.start_date.day
+            recurring.next_occurrence = _advance_date(
+                latest_tx_date, recurring.frequency, intended_day=intended_day
+            )
+        else:
+            recurring.next_occurrence = recurring.start_date
 
     await session.commit()
     await session.refresh(recurring)
@@ -220,15 +252,30 @@ async def generate_pending(
                 recurring.is_active = False
                 break
 
+            # If a placeholder was already generated for this occurrence
+            # (source="recurring"), skip it — prevents duplicates when
+            # generate_pending runs multiple times or next_occurrence is
+            # reset by an edit.
+            existing_placeholder = (
+                await session.execute(
+                    select(Transaction.id).where(
+                        Transaction.recurring_transaction_id == recurring.id,
+                        Transaction.source == "recurring",
+                        Transaction.date == recurring.next_occurrence,
+                        Transaction.account_id == recurring.account_id,
+                    )
+                )
+            ).scalar_one_or_none()
+            if existing_placeholder is not None:
+                pass  # already materialized, just advance
             # If a real transaction (synced/imported/manual) already covers this
             # occurrence, link it to the bill instead of writing a duplicate
             # placeholder (issue #116). Otherwise materialize the placeholder,
             # stamped with the recurring link so a later synced charge merges
             # into it rather than duplicating.
-            existing_real = await recurring_match_service.find_real_tx_for_occurrence(
+            elif (existing_real := await recurring_match_service.find_real_tx_for_occurrence(
                 session, recurring, recurring.next_occurrence
-            )
-            if existing_real is not None:
+            )) is not None:
                 existing_real.recurring_transaction_id = recurring.id
             else:
                 transaction = Transaction(
@@ -242,6 +289,11 @@ async def generate_pending(
                     type=recurring.type,
                     source="recurring",
                     recurring_transaction_id=recurring.id,
+                    # Projected occurrences are "a pagar" — they surface in the
+                    # Agendamentos section (and the month view) as scheduled and
+                    # only count toward balance / income-expense once marked paid
+                    # (status -> posted) or upgraded by a real synced charge.
+                    status="scheduled",
                 )
                 account = await session.get(Account, recurring.account_id)
                 apply_effective_date(transaction, account)

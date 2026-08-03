@@ -54,6 +54,7 @@ async def test_create_recurring_transaction(
         frequency="monthly",
         start_date=date(2025, 1, 15),
         account_id=test_account_for_recurring.id,
+        auto_generate=False,  # keep next_occurrence deterministic for the CRUD contract
     )
     rec = await create_recurring_transaction(session, test_workspace.id, test_user.id, data)
 
@@ -75,6 +76,7 @@ async def test_create_with_skip_first(session: AsyncSession, test_user, test_wor
         start_date=date(2025, 3, 1),
         account_id=test_account_for_recurring.id,
         skip_first=True,
+        auto_generate=False,  # keep next_occurrence deterministic for the skip_first contract
     )
     rec = await create_recurring_transaction(session, test_workspace.id, test_user.id, data)
 
@@ -384,8 +386,11 @@ async def test_generate_pending(session: AsyncSession, test_user, test_workspace
             frequency="monthly",
             start_date=date(2025, 1, 1),
             account_id=test_account_for_recurring.id,
+            auto_generate=False,  # legacy-style bill: generate_pending processes it explicitly
         ),
     )
+    rec.auto_generate = True
+    await session.commit()
 
     count = await generate_pending(session, test_user.id, up_to=date(2025, 3, 15))
     assert count == 3  # Jan, Feb, Mar
@@ -421,8 +426,11 @@ async def test_generate_pending_deactivates_past_end_date(
             start_date=date(2025, 1, 1),
             end_date=date(2025, 2, 15),
             account_id=test_account_for_recurring.id,
+            auto_generate=False,  # legacy-style bill: generate_pending processes it explicitly
         ),
     )
+    rec.auto_generate = True
+    await session.commit()
 
     count = await generate_pending(session, test_user.id, up_to=date(2025, 12, 31))
     # Should create Jan and Feb (Feb 1 <= Feb 15), then deactivate
@@ -436,7 +444,7 @@ async def test_generate_pending_deactivates_past_end_date(
 async def test_generate_pending_no_duplicates(
     session: AsyncSession, test_user, test_workspace, test_account_for_recurring
 ):
-    await create_recurring_transaction(
+    rec = await create_recurring_transaction(
         session,
         test_workspace.id, test_user.id,
         RecurringTransactionCreate(
@@ -446,8 +454,11 @@ async def test_generate_pending_no_duplicates(
             frequency="monthly",
             start_date=date(2025, 1, 1),
             account_id=test_account_for_recurring.id,
+            auto_generate=False,  # legacy-style bill: generate_pending processes it explicitly
         ),
     )
+    rec.auto_generate = True
+    await session.commit()
 
     # Generate once
     count1 = await generate_pending(session, test_user.id, up_to=date(2025, 3, 1))
@@ -455,3 +466,38 @@ async def test_generate_pending_no_duplicates(
     count2 = await generate_pending(session, test_user.id, up_to=date(2025, 3, 1))
     assert count1 == 3
     assert count2 == 0
+
+
+@pytest.mark.asyncio
+async def test_generate_pending_creates_scheduled_status(
+    session: AsyncSession, test_user, test_workspace, test_account_for_recurring
+):
+    """Projected recurring occurrences surface as scheduled ("a pagar"), not posted."""
+    rec = await create_recurring_transaction(
+        session,
+        test_workspace.id, test_user.id,
+        RecurringTransactionCreate(
+            description="Agua",
+            amount=Decimal("75.00"),
+            type="debit",
+            frequency="monthly",
+            start_date=date(2025, 1, 1),
+            account_id=test_account_for_recurring.id,
+            auto_generate=False,  # legacy-style bill: generate_pending processes it explicitly
+        ),
+    )
+    rec.auto_generate = True
+    await session.commit()
+
+    await generate_pending(session, test_user.id, up_to=date(2025, 1, 31))
+
+    result = await session.execute(
+        select(Transaction).where(
+            Transaction.user_id == test_user.id,
+            Transaction.source == "recurring",
+            Transaction.description == "Agua",
+        )
+    )
+    txns = result.scalars().all()
+    assert len(txns) == 1
+    assert txns[0].status == "scheduled"

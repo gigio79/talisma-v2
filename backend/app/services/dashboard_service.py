@@ -17,6 +17,7 @@ from app.services._query_filters import (
     counts_as_user_pnl,
     owner_split_offset_by_category,
     owner_split_offset_pnl,
+    realized_only,
     reporting_date_col,
     viewer_shared_pnl,
     viewer_shared_spending_by_category,
@@ -74,11 +75,38 @@ async def _get_recurring_projections(
     result = await session.execute(stmt)
     recurring_list = list(result.scalars().all())
 
+    rec_ids = [rec.id for rec in recurring_list]
+    # Materialized occurrences (any status) for these recurrings within the month.
+    # Needed so the projection can (a) anchor at the earliest still-unpaid
+    # placeholder and (b) skip dates already counted in the real aggregates.
+    mat_dates: dict[uuid.UUID, dict[date, str]] = {}
+    if rec_ids:
+        rows = await session.execute(
+            select(Transaction.recurring_transaction_id, Transaction.date, Transaction.status)
+            .where(
+                Transaction.recurring_transaction_id.in_(rec_ids),
+                Transaction.date >= month_start,
+                Transaction.date < month_end,
+            )
+        )
+        for rid, tdate, status in rows.all():
+            mat_dates.setdefault(rid, {})[tdate] = status
+
     projections = []
     for rec in recurring_list:
-        # Compute occurrences starting from next_occurrence (skips already-created transactions)
+        # Anchor at the earliest unpaid ("scheduled") placeholder in the range so
+        # a month materialized in advance (Transactions view) still shows its full
+        # forecast; otherwise start at next_occurrence, which skips occurrences
+        # already turned into transactions.
+        anchor = rec.next_occurrence
+        row_statuses = mat_dates.get(rec.id, {})
+        earliest_scheduled = min(
+            (d for d, st in row_statuses.items() if st == "scheduled"), default=None
+        )
+        if earliest_scheduled is not None and earliest_scheduled < anchor:
+            anchor = earliest_scheduled
         occurrences = get_occurrences_in_range(
-            start=rec.next_occurrence,
+            start=anchor,
             frequency=rec.frequency,
             end_date=rec.end_date,
             range_start=month_start,
@@ -86,6 +114,11 @@ async def _get_recurring_projections(
             intended_day=rec.day_of_month or rec.start_date.day,
         )
         for occ_date in occurrences:
+            # Skip dates already counted in the real sums (posted/pending).
+            # Scheduled ("a pagar") dates are excluded from those sums, so they
+            # ARE projected — the forecast keeps showing them until paid.
+            if row_statuses.get(occ_date) in ("posted", "pending"):
+                continue
             projections.append({
                 "category_id": rec.category_id,
                 "amount": float(rec.amount),
@@ -881,25 +914,27 @@ async def _account_balance_at(
         if account.type == "credit_card":
             current_bal = -current_bal
         # Subtract activity after cutoff to get the balance AT cutoff
-        # Exclude ignored transactions from balance calculation
+        # Exclude ignored transactions and scheduled ("a pagar") ones
         delta_after = await session.scalar(
             select(func.coalesce(func.sum(_signed_balance_expr(account.currency)), 0))
             .where(
                 Transaction.account_id == account.id,
                 Transaction.date > cutoff,
                 Transaction.is_ignored == False,
+                realized_only(),
             )
         )
         return current_bal - float(delta_after or 0)
     else:
         # Manual: sum signed transactions up to cutoff
-        # Exclude ignored transactions from balance calculation
+        # Exclude ignored transactions and scheduled ("a pagar") ones
         result = await session.scalar(
             select(func.coalesce(func.sum(_signed_balance_expr(account.currency)), 0))
             .where(
                 Transaction.account_id == account.id,
                 Transaction.date <= cutoff,
                 Transaction.is_ignored == False,
+                realized_only(),
             )
         )
         return float(result or 0)
@@ -979,6 +1014,7 @@ async def _daily_deltas(
             Transaction.date >= start,
             Transaction.date < end,
             Transaction.is_ignored == False,
+            realized_only(),
             or_(
                 Transaction.category_id.is_(None),
                 Category.is_ignored == False,

@@ -7,6 +7,8 @@ import pytest
 @pytest.mark.asyncio
 async def test_create_recurring_transaction(client, auth_headers, test_categories, test_account):
     """Creating a recurring transaction sets next_occurrence to start_date."""
+    today = date.today()
+    future_start = (today + timedelta(days=30)).isoformat()
     response = await client.post(
         "/api/recurring-transactions",
         json={
@@ -15,7 +17,7 @@ async def test_create_recurring_transaction(client, auth_headers, test_categorie
             "currency": "BRL",
             "type": "debit",
             "frequency": "monthly",
-            "start_date": "2026-03-01",
+            "start_date": future_start,
             "category_id": str(test_categories[0].id),
             "account_id": str(test_account.id),
         },
@@ -27,12 +29,16 @@ async def test_create_recurring_transaction(client, auth_headers, test_categorie
     assert data["frequency"] == "monthly"
     assert data["is_active"] is True
     # next_occurrence should be start_date since skip_first not set
-    assert data["next_occurrence"] == "2026-03-01"
+    # and the start date is in the future (no pending to generate)
+    assert data["next_occurrence"] == future_start
 
 
 @pytest.mark.asyncio
 async def test_create_recurring_with_skip_first(client, auth_headers, test_categories, test_account):
     """skip_first=true advances next_occurrence by one frequency period."""
+    today = date.today()
+    future_start = (today + timedelta(days=30)).isoformat()
+    expected_next = (today + timedelta(days=37)).isoformat()  # +1 week
     response = await client.post(
         "/api/recurring-transactions",
         json={
@@ -41,7 +47,7 @@ async def test_create_recurring_with_skip_first(client, auth_headers, test_categ
             "currency": "EUR",
             "type": "debit",
             "frequency": "weekly",
-            "start_date": "2026-02-25",
+            "start_date": future_start,
             "skip_first": True,
             "category_id": str(test_categories[0].id),
             "account_id": str(test_account.id),
@@ -53,12 +59,25 @@ async def test_create_recurring_with_skip_first(client, auth_headers, test_categ
     assert data["description"] == "Mercadinho"
     assert data["frequency"] == "weekly"
     # next_occurrence should be one week ahead (not start_date)
-    assert data["next_occurrence"] == "2026-03-04"
+    assert data["next_occurrence"] == expected_next
 
 
 @pytest.mark.asyncio
 async def test_create_recurring_skip_first_monthly(client, auth_headers, test_account):
     """skip_first with monthly frequency advances by one month."""
+    import calendar
+    today = date.today()
+    future_start = today + timedelta(days=30)
+    # _advance_date for monthly: +1 month, capping day to month length
+    next_month = future_start.month + 1
+    next_year = future_start.year
+    if next_month > 12:
+        next_month = 1
+        next_year += 1
+    max_day = calendar.monthrange(next_year, next_month)[1]
+    expected_day = min(future_start.day, max_day)
+    expected_next = date(next_year, next_month, expected_day).isoformat()
+
     response = await client.post(
         "/api/recurring-transactions",
         json={
@@ -67,7 +86,7 @@ async def test_create_recurring_skip_first_monthly(client, auth_headers, test_ac
             "currency": "BRL",
             "type": "debit",
             "frequency": "monthly",
-            "start_date": "2026-01-15",
+            "start_date": future_start.isoformat(),
             "skip_first": True,
             "account_id": str(test_account.id),
         },
@@ -75,28 +94,39 @@ async def test_create_recurring_skip_first_monthly(client, auth_headers, test_ac
     )
     assert response.status_code == 201
     data = response.json()
-    assert data["next_occurrence"] == "2026-02-15"
+    assert data["next_occurrence"] == expected_next
 
 
 @pytest.mark.asyncio
-async def test_generate_pending_creates_transactions(client, auth_headers, test_account):
+async def test_generate_pending_creates_transactions(client, auth_headers, session, test_user, test_account):
     """Generate pending creates transactions and advances next_occurrence."""
-    # Create a recurring that's already past due
-    create_resp = await client.post(
-        "/api/recurring-transactions",
-        json={
-            "description": "Weekly gym",
-            "amount": 30.00,
-            "currency": "BRL",
-            "type": "debit",
-            "frequency": "weekly",
-            "start_date": "2026-02-01",
-            "account_id": str(test_account.id),
-        },
-        headers=auth_headers,
+    import uuid as _uuid
+    from decimal import Decimal as _Decimal
+    from app.models.recurring_transaction import RecurringTransaction
+
+    today = date.today()
+    past_start = today - timedelta(days=60)
+
+    # Insert a past-due recurring directly (bypassing create API which now
+    # generates on creation) so we can test the /generate endpoint in
+    # isolation.
+    rec = RecurringTransaction(
+        id=_uuid.uuid4(),
+        user_id=test_user.id,
+        account_id=test_account.id,
+        description="Weekly gym",
+        amount=_Decimal("30.00"),
+        currency="BRL",
+        type="debit",
+        frequency="weekly",
+        start_date=past_start,
+        next_occurrence=past_start,
+        is_active=True,
+        auto_generate=True,
     )
-    assert create_resp.status_code == 201
-    rec_id = create_resp.json()["id"]
+    session.add(rec)
+    await session.commit()
+    rec_id = str(rec.id)
 
     # Generate pending — should create multiple transactions up to today
     gen_resp = await client.post(
@@ -108,19 +138,14 @@ async def test_generate_pending_creates_transactions(client, auth_headers, test_
     assert generated >= 1
 
     # Verify the recurring's next_occurrence is now in the future
-    await client.get(
-        f"/api/recurring-transactions/{rec_id}",
-        headers=auth_headers,
-    )
-    # It may be 404 if list-only, check the list
     list_resp = await client.get(
         "/api/recurring-transactions",
         headers=auth_headers,
     )
     assert list_resp.status_code == 200
-    rec = next(r for r in list_resp.json() if r["id"] == rec_id)
-    # next_occurrence should be after today (2026-02-25)
-    assert rec["next_occurrence"] > "2026-02-25"
+    rec_data = next(r for r in list_resp.json() if r["id"] == rec_id)
+    # next_occurrence should be after today
+    assert rec_data["next_occurrence"] > today.isoformat()
 
 
 @pytest.mark.asyncio

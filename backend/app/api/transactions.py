@@ -18,6 +18,7 @@ from app.core.workspace_context import (
 from app.schemas.transaction import BulkAddToGroupRequest, BulkCategorizeRequest, BulkTagsRequest, CreateCounterpartRequest, InstallmentPlanCreate, LinkTransferRequest, TransactionCreate, TransactionRead, TransactionUpdate, TransferCreate, TransferRead
 from app.services import transaction_service
 from app.services.admin_service import get_credit_card_accounting_mode
+from app.services.recurring_transaction_service import generate_pending
 
 router = APIRouter(prefix="/api/transactions", tags=["transactions"])
 
@@ -100,10 +101,17 @@ async def list_transactions(
     max_amount: Optional[float] = Query(None, ge=0, description="Filter to transactions with absolute amount <= this value (primary currency)."),
     sort_by: Optional[str] = Query(None, description="Column to sort by (date|amount|description|payee|category|account|type|status). Default: date desc."),
     sort_dir: str = Query("desc", regex="^(asc|desc)$"),
+    statuses: Optional[List[str]] = Query(None, description="Lifecycle status filter: posted, pending, scheduled"),
     ctx: WorkspaceContext = Depends(current_workspace),
     session: AsyncSession = Depends(get_async_session),
 ):
     accounting_mode = await get_credit_card_accounting_mode(session)
+    # Materialize active recurrings into the viewed range so future-dated
+    # occurrences (next_occurrence > today) appear in the month as scheduled
+    # ("a pagar") instead of silently missing. Idempotent: paid / already
+    # generated occurrences are skipped by generate_pending's dedup logic.
+    if from_date or to_date:
+        await generate_pending(session, ctx.user_id, up_to=max(to_date, date.today()))
     transactions, total, summary = await transaction_service.get_transactions(
         session, ctx.workspace.id, ctx.user_id,
         account_ids=_merge_id_filters(account_id, account_ids),
@@ -119,6 +127,7 @@ async def list_transactions(
         unbilled_only=unbilled_only,
         sort_by=sort_by,
         sort_dir=sort_dir,
+        statuses=statuses,
         min_amount=min_amount,
         max_amount=max_amount,
         include_summary=True,

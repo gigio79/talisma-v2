@@ -138,7 +138,10 @@ async def test_dashboard_virtual_recurring_projection(
     # At least 4 weekly occurrences in a month = at least 200
     assert cat_spending["total"] >= 200.0
 
-    # CRITICAL: No transactions should have been created in the DB (virtual projection)
+    # The transactions endpoint materializes future recurring occurrences as
+    # "scheduled" ("a pagar") — the dashboard endpoints themselves must never
+    # create *posted/real* records on their own. Verify every materialized row
+    # is scheduled, not posted.
     # Compute the last day of next month for the query range
     if next_month_date.month == 12:
         month_end = next_month_date.replace(year=next_month_date.year + 1, month=1)
@@ -151,7 +154,10 @@ async def test_dashboard_virtual_recurring_projection(
     )
     assert tx_resp.status_code == 200
     groceries = [t for t in tx_resp.json()["items"] if t["description"] == "Weekly groceries"]
-    assert len(groceries) == 0, "Virtual projections must NOT create DB records"
+    assert len(groceries) > 0, "Future recurrences are materialized as scheduled in the month view"
+    assert all(t["status"] == "scheduled" for t in groceries), (
+        "Materialized occurrences must be 'scheduled' (a pagar), not posted"
+    )
 
     # Summary should also include the projected expenses
     summary_resp = await client.get(
@@ -161,6 +167,10 @@ async def test_dashboard_virtual_recurring_projection(
     )
     assert summary_resp.status_code == 200
     assert summary_resp.json()["monthly_expenses"] >= 200.0
+    # Scheduled rows are excluded from aggregates and projections are added
+    # once virtually — materialization must NOT double-count them. Weekly
+    # $50 x at most 5 occurrences = at most 250; double-counting would hit ~500.
+    assert summary_resp.json()["monthly_expenses"] < 300.0
 
 
 @pytest.mark.asyncio
@@ -211,7 +221,8 @@ async def test_dashboard_no_duplicates_on_concurrent_calls(
     assert summary_resp.json()["monthly_expenses"] == summary2.json()["monthly_expenses"]
     assert spending_resp.json() == spending2.json()
 
-    # No transaction records should exist — projections are virtual
+    # Exactly one materialized occurrence should exist — single monthly row,
+    # and it must be "scheduled" (a pagar), never posted or duplicated.
     if next_month_date.month == 12:
         month_end = next_month_date.replace(year=next_month_date.year + 1, month=1)
     else:
@@ -222,7 +233,8 @@ async def test_dashboard_no_duplicates_on_concurrent_calls(
         headers=auth_headers,
     )
     rent_txs = [t for t in tx_resp.json()["items"] if t["description"] == "Rent"]
-    assert len(rent_txs) == 0, "Virtual projections must NOT create DB records"
+    assert len(rent_txs) == 1, "Concurrent dashboard calls must not create duplicate occurrences"
+    assert rent_txs[0]["status"] == "scheduled"
 
 
 @pytest.mark.asyncio

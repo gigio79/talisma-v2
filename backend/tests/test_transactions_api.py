@@ -1,5 +1,5 @@
 import uuid
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
 import pytest
@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.account import Account
 from app.models.transaction import Transaction
 from app.models.category import Category
+from app.models.recurring_transaction import RecurringTransaction
 from app.models.user import User
 
 
@@ -643,6 +644,143 @@ async def test_list_transactions_user_pnl_only(
     data = response.json()
     assert data["total"] == 1
     assert [item["description"] for item in data["items"]] == ["SALARY"]
+
+
+@pytest.mark.asyncio
+async def test_list_transactions_filter_by_statuses(
+    client: AsyncClient,
+    auth_headers,
+    session: AsyncSession,
+    test_transactions: list[Transaction],
+):
+    """statuses filter splits the list by lifecycle status (bank-statement view)."""
+    # Mark one as pending, one as scheduled; the other three stay posted.
+    test_transactions[0].status = "pending"
+    test_transactions[1].status = "scheduled"
+    await session.commit()
+
+    response = await client.get("/api/transactions?statuses=posted", headers=auth_headers)
+    assert response.status_code == 200
+    data = response.json()
+    assert data["total"] == 3
+    assert all(item["status"] == "posted" for item in data["items"])
+
+    response = await client.get(
+        "/api/transactions?statuses=pending&statuses=scheduled", headers=auth_headers
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["total"] == 2
+    assert {item["status"] for item in data["items"]} == {"pending", "scheduled"}
+
+
+def _future_occurrence() -> date:
+    """An occurrence date guaranteed to be in a future month (> today)."""
+    return (date.today().replace(day=1) + timedelta(days=40)).replace(day=10)
+
+
+def _month_bounds(day: date) -> tuple[date, date]:
+    start = day.replace(day=1)
+    end = (start.replace(day=28) + timedelta(days=4)).replace(day=1) - timedelta(days=1)
+    return start, end
+
+
+@pytest.mark.asyncio
+async def test_list_transactions_materializes_future_recurring(
+    client: AsyncClient,
+    auth_headers,
+    session: AsyncSession,
+    test_user,
+    test_workspace,
+    test_account: Account,
+):
+    """Month view projects active recurrings due in that month as scheduled."""
+    occ = _future_occurrence()
+    rec = RecurringTransaction(
+        id=uuid.uuid4(),
+        user_id=test_user.id,
+        workspace_id=test_workspace.id,
+        account_id=test_account.id,
+        description="Aluguel",
+        amount=Decimal("1200.00"),
+        currency="BRL",
+        type="debit",
+        frequency="monthly",
+        start_date=occ,
+        next_occurrence=occ,
+        is_active=True,
+        auto_generate=True,
+    )
+    session.add(rec)
+    await session.commit()
+
+    from_date, to_date = _month_bounds(occ)
+    response = await client.get(
+        f"/api/transactions?from={from_date}&to={to_date}", headers=auth_headers
+    )
+    assert response.status_code == 200
+    matching = [t for t in response.json()["items"] if t["description"] == "Aluguel"]
+    assert len(matching) == 1
+    assert matching[0]["status"] == "scheduled"
+    assert matching[0]["date"] == occ.isoformat()
+
+
+@pytest.mark.asyncio
+async def test_list_transactions_no_duplicate_after_paid(
+    client: AsyncClient,
+    auth_headers,
+    session: AsyncSession,
+    test_user,
+    test_workspace,
+    test_account: Account,
+):
+    """Paying a projected recurring (status -> posted) prevents a duplicate schedule."""
+    occ = _future_occurrence()
+    rec = RecurringTransaction(
+        id=uuid.uuid4(),
+        user_id=test_user.id,
+        workspace_id=test_workspace.id,
+        account_id=test_account.id,
+        description="Internet",
+        amount=Decimal("99.90"),
+        currency="BRL",
+        type="debit",
+        frequency="monthly",
+        start_date=occ,
+        next_occurrence=occ,
+        is_active=True,
+        auto_generate=True,
+    )
+    session.add(rec)
+    await session.commit()
+
+    from_date, to_date = _month_bounds(occ)
+    r1 = await client.get(
+        f"/api/transactions?from={from_date}&to={to_date}", headers=auth_headers
+    )
+    assert r1.status_code == 200
+    items1 = [t for t in r1.json()["items"] if t["description"] == "Internet"]
+    assert len(items1) == 1
+    assert items1[0]["status"] == "scheduled"
+
+    # User clicks "Pagar": flip the projected occurrence to posted.
+    paid = await client.patch(
+        f"/api/transactions/{items1[0]['id']}", json={"status": "posted"}, headers=auth_headers
+    )
+    assert paid.status_code == 200
+
+    # Simulate an edit that resets next_occurrence back onto the paid occurrence —
+    # the dedup check must recognize the posting and NOT create a new schedule.
+    rec.next_occurrence = occ
+    await session.commit()
+
+    r2 = await client.get(
+        f"/api/transactions?from={from_date}&to={to_date}", headers=auth_headers
+    )
+    assert r2.status_code == 200
+    items2 = [t for t in r2.json()["items"] if t["description"] == "Internet"]
+    assert len(items2) == 1
+    assert items2[0]["status"] == "posted"
 
 
 @pytest.mark.asyncio
