@@ -3,8 +3,6 @@ from __future__ import annotations
 import re
 
 from app.parsing.base import (
-    CREDITO,
-    DEBITO,
     PIX_ENVIADO,
     PIX_RECEBIDO,
     BaseParser,
@@ -13,27 +11,16 @@ from app.parsing.base import (
     make_transaction,
 )
 
-# Nubank credit purchase:
-#   "Compra de R$ 50,50 APROVADA em LOJAS AMERICANAS 569 para o cartão com final 4251."
-_COMPRA_CREDITO = re.compile(
-    r"[Cc]ompra\s+de\s+R\$\s*([\d.,]+)\s+"
-    r"(?:APROVADA|aprovada)\s+em\s+"
-    r"(.+?)\s+"
-    r"(?:para\s+o\s+cart[aã]o\s+com\s+final|no\s+cart[aã]o\s+final)\s+"
-    r"(\d{4})",
-    re.IGNORECASE,
-)
-
-# Nubank PIX enviado:
-#   "Você fez um Pix no valor de R$ 273,82 para CENCOSUD BRASIL ATACADO LTDA."
+# InfinitePay PIX enviado:
+#   "InfinitePay — Pix enviado\nPix enviado com sucesso! ✅\nVocê fez um Pix no valor de R$ 273,82 para CENCOSUD BRASIL ATACADO LTDA."
 _PIX_ENVIADO = re.compile(
     r"(?:Vo[cç][eéê]\s+)?fez\s+um\s+Pix\s+no\s+valor\s+de\s+R\$\s*([\d.,]+)\s+para\s+"
     r"(.+?)(?:\.|$)",
     re.IGNORECASE | re.DOTALL,
 )
 
-# Nubank PIX recebido (multi-linha):
-#   "DEBORA RIBEIRO... enviou um Pix para você\nVocê recebeu um Pix de R$0,10."
+# InfinitePay PIX recebido:
+#   "NOME enviou um Pix para você\nVocê recebeu um Pix de R$X"
 _PIX_RECEBIDO = re.compile(
     r"(.+?)\s+enviou\s+um\s+Pix\s+para\s+voc[eêê]"
     r".*?(?:Vo[cç][eéê]\s+)?recebeu(?:u)?\s+um\s+Pix\s+de\s+R\$\s*([\d.,]+)",
@@ -41,12 +28,12 @@ _PIX_RECEBIDO = re.compile(
 )
 
 
-class NubankParser(BaseParser):
-    app_name = "Nubank"
+class InfinitePayParser(BaseParser):
+    app_name = "InfinitePay"
+    aliases = ("Infinite Pay",)
 
     def matches(self, text: str) -> bool:
-        lower = text.lower()
-        return "nubank" in lower or ("compra" in lower and "aprovada" in lower and "cartão" in lower)
+        return "infinitepay" in text.lower()
 
     def parse(self, text: str, sender: str = "", app_hint: str = "") -> ParsedTransaction | None:
         banco = app_hint or self.app_name
@@ -79,25 +66,6 @@ class NubankParser(BaseParser):
                 valor=valor,
                 origem_destino=nome,
                 notificacao_original=text,
-            )
-
-        # Compra no cartão — crédito by default (Nubank "compra aprovada"
-        # refers to the credit card), débito when the text says "no débito".
-        m = _COMPRA_CREDITO.search(text)
-        if m:
-            valor = _parse_valor(m.group(1))
-            if valor is None:
-                return None
-            estabelecimento = m.group(2).strip()
-            cartao_final = m.group(3)
-            movement = DEBITO if re.search(r"d[eé]bito", text, re.IGNORECASE) else CREDITO
-            return make_transaction(
-                banco_app=banco,
-                movement_type=movement,
-                valor=valor,
-                origem_destino=estabelecimento,
-                notificacao_original=text,
-                cartao_final=cartao_final,
             )
 
         return None

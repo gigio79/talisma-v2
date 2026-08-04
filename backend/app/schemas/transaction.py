@@ -33,6 +33,12 @@ class TransactionCreate(TransactionBase):
     amount_primary: Optional[Decimal] = None
     fx_rate_used: Optional[Decimal] = None
     effective_bill_date: Optional[_Date] = None
+    # Lifecycle override (posted | pending | scheduled). When omitted, the
+    # service derives it: debit dated in the future -> scheduled (a pagar),
+    # otherwise posted. Scheduled debits don't affect the balance until paid.
+    status: Optional[Literal["posted", "pending", "scheduled"]] = None
+    # Original vencimento for scheduled transactions. Defaults to `date`.
+    due_date: Optional[_Date] = None
     splits: Optional[TransactionSplitsInput] = None
     # Installment metadata — optional for manual creation on CC accounts.
     installment_number: Optional[int] = None
@@ -54,6 +60,8 @@ class TransactionUpdate(BaseModel):
     amount_primary: Optional[Decimal] = None
     fx_rate_used: Optional[Decimal] = None
     is_ignored: Optional[bool] = None
+    status: Optional[Literal["posted", "pending", "scheduled"]] = None
+    due_date: Optional[_Date] = None
     apply_to_transfer_pair: bool = False
     # CC bucketing override (issue #92). Empty string / explicit null clears
     # it back to auto. Only meaningful for credit-card accounts.
@@ -91,6 +99,7 @@ class TransactionRead(TransactionBase):
     currency: str = "USD"
     source: str
     status: str = "posted"
+    due_date: Optional[_Date] = None
     payee: Optional[str] = None
     payee_id: Optional[uuid.UUID] = None
     payee_name: Optional[str] = None
@@ -123,6 +132,9 @@ class TransactionRead(TransactionBase):
     # MacroDroid webhook metadata
     sender: Optional[str] = None
     source_app: Optional[str] = None
+    card_last4: Optional[str] = None
+    needs_review: bool = False
+    movement_type: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
 

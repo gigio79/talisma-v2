@@ -200,7 +200,7 @@ export interface Transaction {
   date: string
   type: 'debit' | 'credit'
   source: string
-  status: 'posted' | 'pending'
+  status: 'posted' | 'pending' | 'scheduled'
   payee: string | null
   payee_id: string | null
   payee_name: string | null
@@ -235,6 +235,12 @@ export interface Transaction {
   parent_owner_name?: string | null
   // Flag to exclude this transaction from reports and dashboard aggregations
   is_ignored: boolean
+  // MacroDroid webhook metadata
+  sender?: string | null
+  source_app?: string | null
+  card_last4?: string | null
+  needs_review?: boolean
+  movement_type?: string | null
 }
 
 export type ShareType = 'equal' | 'exact' | 'percent'
@@ -372,7 +378,7 @@ export interface RuleExportItem {
 }
 
 export interface RuleExportPayload {
-  format: 'securo-categorization-rules'
+  format: 'talisma-categorization-rules'
   version: number
   rules: RuleExportItem[]
 }

@@ -35,6 +35,11 @@ class Transaction(Base):
     amount: Mapped[Decimal] = mapped_column(Numeric(precision=15, scale=2))
     currency: Mapped[str] = mapped_column(String(3), default="USD")
     date: Mapped[_date] = mapped_column(Date)
+    # Original due date for scheduled ("a pagar") manual/recurring debits.
+    # While a transaction is `scheduled` its amount does NOT count toward the
+    # account balance. When the user pays it, `date` becomes the real payment
+    # date and `due_date` preserves the vencimento for badges and undo.
+    due_date: Mapped[Optional[_date]] = mapped_column(Date, nullable=True)
     # Effective date for cash-flow reporting. For regular accounts this equals
     # `date`. For credit card transactions it's the due date of the bill that
     # the transaction belongs to — so accrual-mode aggregations count the
@@ -93,6 +98,15 @@ class Transaction(Base):
     # MacroDroid webhook fields — who triggered the notification and which app
     sender: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     source_app: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    # Last 4 digits of the card used (cartão final), e.g. "4251".
+    card_last4: Mapped[Optional[str]] = mapped_column(String(4), nullable=True)
+    # Flagged for manual review when the parser had to guess a value,
+    # fell back to a placeholder establishment, or could not fully parse.
+    needs_review: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    # Granular movement type from the notification parser:
+    # pix_recebido | pix_enviado | debito | credito. `type` (debit/credit)
+    # above stays derived from it for balance/P&L math.
+    movement_type: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     account: Mapped["Account"] = relationship(back_populates="transactions")
