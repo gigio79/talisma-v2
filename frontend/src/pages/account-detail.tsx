@@ -1,25 +1,25 @@
-import { useState, useMemo, useEffect, useRef } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 import { getAccountName } from '@/lib/account-utils'
 import { useParams, Link } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { useDisplayLocale, useDateLocale } from '@/hooks/use-display-locale'
 import { useQuery, useQueries, useMutation, useQueryClient } from '@tanstack/react-query'
-import { format, addDays, addMonths, parseISO } from 'date-fns'
+import { format, addDays, parseISO } from 'date-fns'
 import { accounts, transactions, categories as categoriesApi, categoryGroups as categoryGroupsApi } from '@/lib/api'
 import { invalidateFinancialQueries } from '@/lib/invalidate-queries'
 import { toast } from 'sonner'
 import type { CreditCardBill, Transaction } from '@/types'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Button } from '@/components/ui/button'
-import { ArrowLeft, ArrowLeftRight, CalendarClock, ChevronLeft, ChevronRight, Clock, EyeClosed, HelpCircle, Paperclip, Pencil, X } from 'lucide-react'
+import { ArrowLeft, ArrowLeftRight, CalendarClock, Clock, EyeClosed, HelpCircle, Paperclip, Pencil, X } from 'lucide-react'
 import { CategoryIcon } from '@/components/category-icon'
 import { TransactionDialog, extractApiError } from '@/components/transaction-dialog'
 import { TransferDialog } from '@/components/transfer-dialog'
-import { DatePickerInput } from '@/components/ui/date-picker-input'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { MonthRangeFilter } from '@/components/month-range-filter'
+import { currentMonth, monthRange } from '@/lib/month-utils'
 import { usePrivacyMode } from '@/hooks/use-privacy-mode'
 import { useAuth } from '@/contexts/auth-context'
 import { useWorkspace } from '@/contexts/workspace-context'
@@ -33,69 +33,8 @@ import {
   ResponsiveContainer,
 } from 'recharts'
 
-function defaultFrom() {
-  const now = new Date()
-  return format(new Date(now.getFullYear(), now.getMonth(), 1), 'yyyy-MM-dd')
-}
-
-function defaultTo() {
-  return format(new Date(), 'yyyy-MM-dd')
-}
-
 function daysInMonth(year: number, month: number): number {
   return new Date(year, month + 1, 0).getDate()
-}
-
-/** Return the default cycle for a credit card: the cycle whose bill is *next due*.
- *
- * This is NOT the cycle containing today. When the statement has just closed
- * (e.g. gold: closes day 11, today is day 13, due day 16), the user wants to
- * see the bill they're about to pay (Abr 2026), not the brand-new open cycle
- * that's busy accumulating charges for next month's bill (Mai 2026). For accounts
- * where the close hasn't happened yet (e.g. TASSIO: close 28, today 13) the
- * "next due" cycle IS the open one, so this function returns the same as
- * creditCardCycleBoundaries(closeDay, today). */
-function defaultCycleForCreditCard(
-  closeDay: number | null | undefined,
-  dueDay: number | null | undefined,
-  reference: Date,
-): { start: string; end: string } {
-  if (!closeDay || !dueDay) {
-    return creditCardCycleBoundaries(closeDay, reference)
-  }
-  // Step 1: find the next occurrence of dueDay on or after `reference`.
-  const ref0 = new Date(reference)
-  ref0.setHours(0, 0, 0, 0)
-  const y = ref0.getFullYear()
-  const m = ref0.getMonth()
-  const clampDue = (yy: number, mm: number) => Math.min(dueDay, daysInMonth(yy, mm))
-  const sameMonthDue = new Date(y, m, clampDue(y, m))
-  let billDate: Date
-  if (sameMonthDue.getTime() >= ref0.getTime()) {
-    billDate = sameMonthDue
-  } else {
-    const ny = m === 11 ? y + 1 : y
-    const nm = m === 11 ? 0 : m + 1
-    billDate = new Date(ny, nm, clampDue(ny, nm))
-  }
-  // Step 2: find the cycle whose bill is `billDate` — its close date is the
-  // most recent closeDay on or before billDate. The cycle's inclusive last
-  // day is one day before that close (per Brazilian convention).
-  const by = billDate.getFullYear()
-  const bm = billDate.getMonth()
-  const clampClose = (yy: number, mm: number) => Math.min(closeDay, daysInMonth(yy, mm))
-  const sameMonthClose = new Date(by, bm, clampClose(by, bm))
-  let cycleClose: Date
-  if (sameMonthClose.getTime() <= billDate.getTime()) {
-    cycleClose = sameMonthClose
-  } else {
-    const py = bm === 0 ? by - 1 : by
-    const pm = bm === 0 ? 11 : bm - 1
-    cycleClose = new Date(py, pm, clampClose(py, pm))
-  }
-  const refInsideCycle = new Date(cycleClose)
-  refInsideCycle.setDate(refInsideCycle.getDate() - 1)
-  return creditCardCycleBoundaries(closeDay, refInsideCycle)
 }
 
 /** Compute the bill due date for a credit card cycle whose end is `cycleEnd`.
@@ -261,6 +200,29 @@ function utilizationColor(pct: number): string {
   return 'bg-emerald-500'
 }
 
+/** Split an Agendamentos row into a prominent title (establishment /
+ * beneficiary) and a subtle subtitle (item description / observation).
+ * The data stores the establishment in two shapes: either `description` holds
+ * just the name and `notes` holds the observation ("Loja Cem" + "- Carrinho do
+ * Lucca"), or `description` is a single concatenated string ("Loja Cem -
+ * Carrinho do Lucca"). Prefers payee when present, then the part before the
+ * first " - ". */
+function scheduleDisplay(tx: Transaction): { title: string; subtitle: string | null } {
+  const payee = tx.payee_name || tx.payee
+  const first = tx.description.split(' - ')[0].trim()
+  const title = payee || first || tx.description
+  let subtitle: string | null = null
+  if (tx.notes && tx.notes.trim()) {
+    subtitle = tx.notes.replace(/^-\s*/, '').trim()
+  } else if (payee && tx.description !== payee) {
+    subtitle = tx.description.trim()
+  } else if (tx.description.includes(' - ')) {
+    const rest = tx.description.split(' - ').slice(1).join(' - ').trim()
+    if (rest) subtitle = rest
+  }
+  return { title, subtitle }
+}
+
 type TxWithBalance = Transaction & { runningBalance: number }
 
 export default function AccountDetailPage() {
@@ -276,64 +238,25 @@ export default function AccountDetailPage() {
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editingTx, setEditingTx] = useState<Transaction | null>(null)
   const [transferDialogOpen, setTransferDialogOpen] = useState(false)
-  const [filterFrom, setFilterFrom] = useState(defaultFrom)
-  const [filterTo, setFilterTo] = useState(defaultTo)
+  const [filterFrom, setFilterFrom] = useState(() => monthRange(currentMonth()).from)
+  const [filterTo, setFilterTo] = useState(() => monthRange(currentMonth()).to)
   const [showPrimary, setShowPrimary] = useState(false)
-  const filterTouched = useRef(false)
-  const handleFilterFromChange = (v: string) => { filterTouched.current = true; setFilterFrom(v) }
-  const handleFilterToChange = (v: string) => { filterTouched.current = true; setFilterTo(v) }
-  const shiftCycleBy = (direction: -1 | 1) => {
-    filterTouched.current = true
-    // Bill-aware nav: step through the bills list when we have it, so prev/next
-    // mirrors the bank's actual statements (handles dynamic close days).
-    if (billsAsc.length > 0) {
-      const currentIdx = activeBill
-        ? billsAsc.indexOf(activeBill)
-        : billsAsc.length // viewing in-progress cycle past the newest bill
-      const newIdx = currentIdx + direction
-      if (newIdx >= 0 && newIdx < billsAsc.length) {
-        const next = billsAsc[newIdx]
-        const prev = newIdx > 0 ? billsAsc[newIdx - 1] : null
-        const { start, end } = rangeForBill(next, prev)
-        setFilterFrom(start)
-        setFilterTo(end)
-        return
-      }
-      // Stepping forward past the newest bill = the in-progress cycle.
-      // Use the full cycle-math range [prev_close, next_close-1] so a tx
-      // dated on the previous close (Brazilian convention: belongs to the
-      // NEXT cycle) shows up. The backend filters bill_id IS NULL in this
-      // path so already-billed txs don't double-count against the bar.
-      if (newIdx === billsAsc.length && account?.statement_close_day) {
-        const cm = creditCardCycleBoundaries(account.statement_close_day, new Date())
-        setFilterFrom(cm.start)
-        setFilterTo(cm.end)
-        return
-      }
-    }
-    if (account?.type === 'credit_card' && account?.statement_close_day) {
-      const ref = direction === -1
-        ? new Date(parseISO(filterFrom + 'T00:00:00').getTime() - 86400000)
-        : new Date(parseISO(filterTo + 'T00:00:00').getTime() + 86400000)
-      const { start, end } = creditCardCycleBoundaries(account.statement_close_day, ref)
-      setFilterFrom(start)
-      setFilterTo(end)
-      return
-    }
-    setFilterFrom(format(addMonths(parseISO(filterFrom + 'T00:00:00'), direction), 'yyyy-MM-dd'))
-    setFilterTo(format(addMonths(parseISO(filterTo + 'T00:00:00'), direction), 'yyyy-MM-dd'))
-  }
-
   const { data: account, isLoading: accountLoading } = useQuery({
     queryKey: ['accounts', id],
     queryFn: () => accounts.get(id!),
     enabled: !!id,
   })
 
+  // Bank-statement view: non-CC accounts show only posted transactions in the
+  // main statement/balance; pending + scheduled live in "Agendamentos".
+  // Credit cards keep the bill logic — pending stays in the cycle.
+  const isCreditCard = account?.type === 'credit_card'
+  const postedOnly = !isCreditCard
+
   // Bills (faturas) from the provider's bills feed — issue #92. Only fetched
   // for CC accounts; non-CC and CC-without-bills both return [] so the UI
   // falls back to local cycle math wherever bills aren't available.
-  // Declared early so the cycle-init useEffect and shiftCycleBy can read it.
+  // Declared early so `activeBill` / `isInProgressCycle` can read it.
   const { data: bills } = useQuery({
     queryKey: ['accounts', id, 'bills'],
     queryFn: () => accounts.bills(id!, 24),
@@ -354,49 +277,12 @@ export default function AccountDetailPage() {
   // True when the user is on the trailing in-progress cycle (CC has bills,
   // but the current view doesn't match any of them). Backend uses this to
   // exclude already-billed txs from the cycle window so they don't double-
-  // count against the in-progress bar/total.
-  const isInProgressCycle = !activeBill && billsAsc.length > 0
-
-  useEffect(() => {
-    if (!account || filterTouched.current) return
-    if (account.type === 'credit_card') {
-      // Default landing matches the existing UX: the bill the user is
-      // about to pay (next due). With a bills feed we can prefer an
-      // upcoming bank-reported bill; if today is past the newest bill,
-      // fall through to local cycle math for the in-progress cycle so
-      // the user sees what's accumulating on the next (not-yet-issued)
-      // statement.
-      if (billsAsc.length > 0) {
-        const today = format(new Date(), 'yyyy-MM-dd')
-        const upcoming = billsAsc.find(b => b.due_date >= today)
-        if (upcoming) {
-          const idx = billsAsc.indexOf(upcoming)
-          const prev = idx > 0 ? billsAsc[idx - 1] : null
-          const { start, end } = rangeForBill(upcoming, prev)
-          setFilterFrom(start)
-          setFilterTo(end)
-          return
-        }
-        // Today is past the newest bill — use cycle-math range
-        // [prev_close, next_close-1] so the prev-close-day tx (Brazilian:
-        // belongs to next cycle) is in window. Backend's bill_id IS NULL
-        // filter in the cycle-math fallback keeps already-billed txs out.
-        if (account.statement_close_day) {
-          const { start, end } = creditCardCycleBoundaries(account.statement_close_day, new Date())
-          setFilterFrom(start)
-          setFilterTo(end)
-          return
-        }
-      }
-      const { start, end } = defaultCycleForCreditCard(
-        account.statement_close_day,
-        account.payment_due_day,
-        new Date(),
-      )
-      setFilterFrom(start)
-      setFilterTo(end)
-    }
-  }, [account, billsAsc])
+  // count against the in-progress bar/total. The in-progress window is the
+  // calendar month currently on screen that contains today.
+  const isInProgressCycle = !activeBill && billsAsc.length > 0 && (() => {
+    const today = format(new Date(), 'yyyy-MM-dd')
+    return filterFrom <= today && today <= filterTo
+  })()
 
   const { data: accountsList } = useQuery({
     queryKey: ['accounts'],
@@ -410,14 +296,15 @@ export default function AccountDetailPage() {
     // For the in-progress cycle (no bill match), unbilled_only excludes
     // txs already linked to a closed bill (anti-double-count).
     queryKey: activeBill
-      ? ['accounts', id, 'summary', { bill_id: activeBill.id, from: filterFrom, to: filterTo }]
-      : ['accounts', id, 'summary', filterFrom, filterTo, { unbilled_only: isInProgressCycle }],
+      ? ['accounts', id, 'summary', { bill_id: activeBill.id, from: filterFrom, to: filterTo, posted_only: postedOnly }]
+      : ['accounts', id, 'summary', filterFrom, filterTo, { unbilled_only: isInProgressCycle, posted_only: postedOnly }],
     queryFn: () => accounts.summary(
       id!,
       filterFrom || undefined,
       filterTo || undefined,
       activeBill?.id,
       isInProgressCycle || undefined,
+      postedOnly || undefined,
     ),
     enabled: !!id,
   })
@@ -497,13 +384,16 @@ export default function AccountDetailPage() {
   })
 
   const { data: balanceHistory, isLoading: balanceHistoryLoading } = useQuery({
-    queryKey: ['accounts', id, 'balance-history', filterFrom, filterTo],
-    queryFn: () => accounts.balanceHistory(id!, filterFrom || undefined, filterTo || undefined),
+    queryKey: ['accounts', id, 'balance-history', filterFrom, filterTo, { posted_only: postedOnly }],
+    queryFn: () => accounts.balanceHistory(id!, filterFrom || undefined, filterTo || undefined, postedOnly || undefined),
     enabled: !!id,
   })
 
+  // Main statement: posted only (non-CC). CC keeps posted + pending so the
+  // fatura (bill) logic is unchanged — scheduled moves to Agendamentos.
+  const mainStatuses = isCreditCard ? ['posted', 'pending'] : ['posted']
   const { data: txData, isLoading: txLoading } = useQuery({
-    queryKey: ['transactions', { account_id: id, bill_id: activeBill?.id, from: filterFrom, to: filterTo, limit: 500, include_opening_balance: true, unbilled_only: isInProgressCycle }],
+    queryKey: ['transactions', { account_id: id, bill_id: activeBill?.id, from: filterFrom, to: filterTo, limit: 500, include_opening_balance: true, unbilled_only: isInProgressCycle, statuses: mainStatuses }],
     queryFn: () => transactions.list({
       account_id: id,
       // When the active cycle is a real bill, prefer bill_id (Pluggy's
@@ -519,6 +409,25 @@ export default function AccountDetailPage() {
       to: filterTo || undefined,
       limit: 500,
       include_opening_balance: true,
+      statuses: mainStatuses,
+    }),
+    enabled: !!id,
+  })
+
+  // "Agendamentos" section: everything that isn't posted yet, scoped to the
+  // month filter selected on the page. CC only lists scheduled — pending
+  // stays in the fatura cycle.
+  const scheduledStatuses = isCreditCard ? ['scheduled'] : ['pending', 'scheduled']
+  const { data: scheduledData, isLoading: scheduledLoading } = useQuery({
+    queryKey: ['transactions', { account_id: id, statuses: scheduledStatuses, from: filterFrom, to: filterTo, sort_by: 'date', sort_dir: 'asc', limit: 500 }],
+    queryFn: () => transactions.list({
+      account_id: id,
+      statuses: scheduledStatuses,
+      from: filterFrom || undefined,
+      to: filterTo || undefined,
+      sort_by: 'date',
+      sort_dir: 'asc',
+      limit: 500,
     }),
     enabled: !!id,
   })
@@ -534,13 +443,25 @@ export default function AccountDetailPage() {
   })
 
   const updateMutation = useMutation({
-    mutationFn: ({ id: txId, ...data }: Partial<Transaction> & { id: string }) =>
+    mutationFn: ({ id: txId, ...data }: Partial<Transaction> & { apply_to_transfer_pair?: boolean } & { id: string }) =>
       transactions.update(txId, data),
     onSuccess: () => {
       invalidateFinancialQueries(queryClient)
       setDialogOpen(false)
       setEditingTx(null)
       toast.success(t('accounts.updated'))
+    },
+    onError: (error) => {
+      toast.error(extractApiError(error))
+    },
+  })
+
+  const markPaidMutation = useMutation({
+    mutationFn: ({ id: txId }: { id: string }) =>
+      transactions.update(txId, { status: 'posted' }),
+    onSuccess: () => {
+      invalidateFinancialQueries(queryClient)
+      toast.success(t('transactions.paid'))
     },
     onError: (error) => {
       toast.error(extractApiError(error))
@@ -615,7 +536,6 @@ export default function AccountDetailPage() {
   })
 
   // Whether to use primary currency amounts (for foreign-currency accounts with toggle, or domestic accounts with foreign txs)
-  const isCreditCard = account?.type === 'credit_card'
   const isForeignCurrency = account ? account.currency !== userCurrency : false
   const usePrimary = !isForeignCurrency || showPrimary
   const displayCurrency = (isForeignCurrency && !showPrimary) ? (account?.currency || userCurrency) : userCurrency
@@ -692,7 +612,7 @@ export default function AccountDetailPage() {
       )
       let running = 0
       const withBalance = ascending.map((tx) => {
-        if (tx.source !== 'opening_balance' && !tx.transfer_pair_id) {
+        if (tx.status !== 'scheduled' && tx.source !== 'opening_balance' && !tx.transfer_pair_id) {
           const amt = usePrimary && tx.amount_primary != null ? Number(tx.amount_primary) : Number(tx.amount)
           if (tx.type === 'debit') running += amt
           else if (tx.type === 'credit') running -= amt
@@ -716,16 +636,28 @@ export default function AccountDetailPage() {
     let running = endBalance
     return sorted.map((tx) => {
       const balanceAtPoint = running
-      const amt = usePrimary && tx.amount_primary != null ? Number(tx.amount_primary) : Number(tx.amount)
-      running -= tx.type === 'credit' ? amt : -amt
+      if (tx.status !== 'scheduled') {
+        const amt = usePrimary && tx.amount_primary != null ? Number(tx.amount_primary) : Number(tx.amount)
+        running -= tx.type === 'credit' ? amt : -amt
+      }
       return { ...tx, runningBalance: balanceAtPoint }
     })
   }, [txData, summary, isCreditCard, balanceHistory, usePrimary])
 
-  const resolvedDefaultRange = account?.type === 'credit_card'
-    ? defaultCycleForCreditCard(account.statement_close_day, account.payment_due_day, new Date())
-    : { start: defaultFrom(), end: defaultTo() }
-  const hasFilters = filterFrom !== resolvedDefaultRange.start || filterTo !== resolvedDefaultRange.end
+  // Total "a pagar" of the SELECTED MONTH: sum of scheduled debits (money
+  // that hasn't moved yet) from the month-filtered list above. Pending rows
+  // are excluded — they post automatically when the bank confirms.
+  const scheduledTotal = useMemo(() => {
+    if (!scheduledData?.items) return 0
+    return scheduledData.items.reduce((acc, tx) => {
+      if (tx.type !== 'debit' || tx.status !== 'scheduled') return acc
+      const amt = usePrimary && tx.amount_primary != null ? Number(tx.amount_primary) : Number(tx.amount)
+      return acc + Math.abs(amt)
+    }, 0)
+  }, [scheduledData, usePrimary])
+
+  const resolvedDefaultRange = monthRange(currentMonth())
+  const hasFilters = filterFrom !== resolvedDefaultRange.from || filterTo !== resolvedDefaultRange.to
 
   const isLoading = accountLoading || summaryLoading
 
@@ -814,96 +746,23 @@ export default function AccountDetailPage() {
           )}
         </div>
         <div className="flex items-center gap-2 sm:gap-3 flex-wrap">
-          {isCreditCard ? (
-            <div className="flex items-center gap-1">
-              <button
-                type="button"
-                className="h-8 w-8 flex items-center justify-center rounded-lg border border-border bg-card text-muted-foreground hover:border-border hover:text-foreground transition-all"
-                onClick={() => shiftCycleBy(-1)}
-                title={t('accounts.previousCycle')}
-              >
-                <ChevronLeft size={16} />
-              </button>
-              <Popover>
-                <PopoverTrigger asChild>
-                  <button
-                    type="button"
-                    className="inline-flex items-center justify-center gap-2 min-w-[140px] border border-border rounded-lg px-3 py-1.5 text-sm bg-card text-foreground hover:bg-muted/50 transition-all cursor-pointer capitalize"
-                  >
-                    {activeBill
-                      ? format(parseISO(activeBill.due_date + 'T00:00:00'), 'MMM yyyy', {
-                          locale: resolveDateFnsLocale(i18n.resolvedLanguage ?? i18n.language),
-                        })
-                      : creditCardCycleLabel(filterTo, account?.payment_due_day, i18n.language)}
-                  </button>
-                </PopoverTrigger>
-                <PopoverContent align="center" className="w-auto p-3 space-y-3">
-                  <div className="space-y-1.5">
-                    <Label className="text-xs">{t('transactions.from')}</Label>
-                    <DatePickerInput
-                      value={filterFrom}
-                      onChange={handleFilterFromChange}
-                      placeholder={t('transactions.from')}
-                    />
-                  </div>
-                  <div className="space-y-1.5">
-                    <Label className="text-xs">{t('transactions.to')}</Label>
-                    <DatePickerInput
-                      value={filterTo}
-                      onChange={handleFilterToChange}
-                      placeholder={t('transactions.to')}
-                    />
-                  </div>
-                </PopoverContent>
-              </Popover>
-              <button
-                type="button"
-                className="h-8 w-8 flex items-center justify-center rounded-lg border border-border bg-card text-muted-foreground hover:border-border hover:text-foreground transition-all"
-                onClick={() => shiftCycleBy(1)}
-                title={t('accounts.nextCycle')}
-              >
-                <ChevronRight size={16} />
-              </button>
-            </div>
-          ) : (
-            <>
-              <div className="flex items-center gap-2">
-                <label className="text-sm text-muted-foreground hidden md:inline">{t('transactions.from')}</label>
-                <DatePickerInput
-                  value={filterFrom}
-                  onChange={handleFilterFromChange}
-                  placeholder={t('transactions.from')}
-                />
-              </div>
-              <div className="flex items-center gap-2">
-                <label className="text-sm text-muted-foreground hidden md:inline">{t('transactions.to')}</label>
-                <DatePickerInput
-                  value={filterTo}
-                  onChange={handleFilterToChange}
-                  placeholder={t('transactions.to')}
-                />
-              </div>
-            </>
-          )}
+          <MonthRangeFilter
+            from={filterFrom}
+            to={filterTo}
+            onChange={(f, t) => { setFilterFrom(f); setFilterTo(t) }}
+            locale={i18n.resolvedLanguage ?? i18n.language}
+            prevLabel={t('transactions.monthPrevious')}
+            nextLabel={t('transactions.monthNext')}
+          />
           {hasFilters && (
             <Button
               variant="ghost"
               size="sm"
               className="text-muted-foreground hover:text-foreground"
               onClick={() => {
-                filterTouched.current = false
-                if (account?.type === 'credit_card') {
-                  const { start, end } = defaultCycleForCreditCard(
-                    account.statement_close_day,
-                    account.payment_due_day,
-                    new Date(),
-                  )
-                  setFilterFrom(start)
-                  setFilterTo(end)
-                } else {
-                  setFilterFrom(defaultFrom())
-                  setFilterTo(defaultTo())
-                }
+                const { from, to } = monthRange(currentMonth())
+                setFilterFrom(from)
+                setFilterTo(to)
               }}
             >
               <X className="h-3.5 w-3.5 mr-1" />
@@ -979,7 +838,6 @@ export default function AccountDetailPage() {
                     key={i}
                     type="button"
                     onClick={() => {
-                      filterTouched.current = true
                       setFilterFrom(c.start)
                       setFilterTo(c.end)
                     }}
@@ -1020,7 +878,7 @@ export default function AccountDetailPage() {
         // "Default cycle" = the bill the user is here to pay (next due). The
         // AGORA tag on Limite disponível only shows when viewing a different cycle.
         const isDefaultCycle =
-          filterFrom === resolvedDefaultRange.start && filterTo === resolvedDefaultRange.end
+          filterFrom === resolvedDefaultRange.from && filterTo === resolvedDefaultRange.to
         // Compute the due date for THIS cycle. activeBill.due_date is the
         // bank-truth date and varies month-to-month with weekends/holidays.
         const cycleDueDate = activeBill
@@ -1379,62 +1237,59 @@ export default function AccountDetailPage() {
                         </td>
                         <td className="px-3 sm:px-4 py-3">
                           <div>
-                            <span className="font-semibold text-foreground text-sm">{tx.description}</span>
-                            {isOpening && (
-                              <span className="ml-2 text-xs text-muted-foreground font-normal border border-border rounded px-1.5 py-0.5">
-                                {t('accounts.openingBalance')}
+                            <div className="flex items-center gap-1.5">
+                              <span className="font-semibold text-foreground text-sm flex-1 min-w-0 truncate">{tx.description}</span>
+                              <span className="flex items-center gap-1.5 shrink-0">
+                                {isOpening && (
+                                  <span className="text-xs text-muted-foreground font-normal shrink-0">
+                                    {t('accounts.openingBalance')}
+                                  </span>
+                                )}
+                                {isTransfer && (
+                                  <span title={t('transactions.transferTooltip')}>
+                                    <ArrowLeftRight size={14} className="shrink-0 text-blue-600" />
+                                  </span>
+                                )}
+                                {isPending && (
+                                  <span title={t('transactions.pending')}>
+                                    <Clock size={14} className="shrink-0 text-amber-500" />
+                                  </span>
+                                )}
+                                {isIgnored && (
+                                  <span title={t('transactions.ignored')}>
+                                    <EyeClosed size={14} className="shrink-0 text-muted-foreground" />
+                                  </span>
+                                )}
+                                {tx.installment_number != null && tx.total_installments != null && (
+                                  <span
+                                    className="inline-flex items-center text-[10px] font-bold tabular-nums text-amber-700 dark:text-amber-400 bg-amber-100 dark:bg-amber-500/20 border border-amber-200 dark:border-amber-500/30 px-1.5 py-0.5 rounded-full shrink-0"
+                                    title={tx.installment_total_amount != null
+                                      ? t('transactions.installmentTooltip', { count: tx.total_installments, total: tx.installment_total_amount })
+                                      : undefined}
+                                  >
+                                    {tx.installment_number}/{tx.total_installments}
+                                  </span>
+                                )}
+                                {tx.effective_bill_date && (
+                                  <span
+                                    title={t('transactions.billOverrideTooltip', 'Movida para a fatura com vencimento em {{date}}', { date: formatDateStr(tx.effective_bill_date, dateLocale) })}
+                                  >
+                                    <CalendarClock size={14} className="shrink-0 text-violet-600" />
+                                  </span>
+                                )}
+                                {(tx.attachment_count ?? 0) > 0 && (
+                                  <Paperclip size={12} className="shrink-0 text-muted-foreground" />
+                                )}
                               </span>
-                            )}
-                            {isTransfer && (
-                              <span className="ml-2 inline-flex items-center gap-1 text-xs text-blue-600 font-normal bg-blue-50 border border-blue-200 rounded px-1.5 py-0.5">
-                                <ArrowLeftRight className="h-3 w-3" />
-                                {t('transactions.transfer')}
-                                <span title={t('transactions.transferTooltip')}><HelpCircle className="h-3 w-3 text-blue-400" /></span>
-                              </span>
-                            )}
-                            {isPending && (
-                              <span className="ml-2 inline-flex items-center gap-1 text-xs text-amber-600 font-normal bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5">
-                                <Clock className="h-3 w-3" />
-                                {t('transactions.pending')}
-                              </span>
-                            )}
-                            {isIgnored && (
-                              <span className="ml-2 inline-flex items-center gap-1 text-xs text-gray-600 font-normal bg-gray-100 border border-gray-200 rounded px-1.5 py-0.5">
-                                <EyeClosed className="h-3 w-3" />
-                                {t('transactions.ignored')}
-                                <span title={t('transactions.ignoreTransferHint')}><HelpCircle className="h-3 w-3 text-blue-400" /></span>
-                              </span>
-                            )}
-                            {tx.installment_number != null && tx.total_installments != null && (
-                              <span
-                                className="ml-2 inline-flex items-center text-[10px] font-bold tabular-nums text-amber-700 dark:text-amber-400 bg-amber-100 dark:bg-amber-500/20 border border-amber-200 dark:border-amber-500/30 px-1.5 py-0.5 rounded-full"
-                                title={tx.installment_total_amount != null
-                                  ? t('transactions.installmentTooltip', { count: tx.total_installments, total: tx.installment_total_amount })
-                                  : undefined}
-                              >
-                                {tx.installment_number}/{tx.total_installments}
-                              </span>
-                            )}
-                            {tx.effective_bill_date && (
-                              <span
-                                className="ml-2 inline-flex items-center gap-1 text-xs text-violet-600 dark:text-violet-400 font-normal bg-violet-50 dark:bg-violet-500/10 border border-violet-200 dark:border-violet-500/30 rounded px-1.5 py-0.5"
-                                title={t('transactions.billOverrideTooltip', 'Movida para a fatura com vencimento em {{date}}', { date: formatDateStr(tx.effective_bill_date, dateLocale) })}
-                              >
-                                <CalendarClock className="h-3 w-3" />
-                                {formatDateStr(tx.effective_bill_date, dateLocale)}
-                              </span>
-                            )}
-                            {(tx.attachment_count ?? 0) > 0 && (
-                              <Paperclip size={12} className="ml-2 inline text-muted-foreground" />
-                            )}
+                            </div>
                           </div>
                           {(tx.payee_name || tx.payee) && (tx.payee_name || tx.payee) !== tx.description && (
                             <p className="text-xs text-muted-foreground mt-0.5">{tx.payee_name || tx.payee}</p>
                           )}
                         </td>
-                        <td className="px-4 py-3 hidden md:table-cell">
+                        <td className="px-4 py-3 hidden md:table-cell text-left">
                           {tx.category ? (
-                            <span className="flex items-center gap-1.5">
+                            <span className="inline-flex items-center justify-start gap-1.5">
                               <CategoryIcon icon={tx.category.icon} color={tx.category.color} size="sm" />
                               <span className="text-sm text-muted-foreground">{tx.category.name}</span>
                             </span>
@@ -1463,6 +1318,118 @@ export default function AccountDetailPage() {
         </div>
       </div>
 
+      {/* Agendamentos — pending + scheduled don't affect the statement balance */}
+      <div className="bg-card rounded-xl border border-border shadow-sm overflow-hidden mt-6">
+        <div className="px-5 py-4 border-b border-border flex items-start justify-between gap-3 flex-wrap">
+          <div className="min-w-0">
+            <p className="font-semibold text-foreground">{t('accounts.scheduledSection')}</p>
+            <p className="text-xs text-muted-foreground mt-0.5">{t('accounts.scheduledHint')}</p>
+          </div>
+          <div className="text-right shrink-0">
+            <p className="text-[10px] sm:text-xs font-medium text-muted-foreground uppercase tracking-wide">
+              {t('accounts.scheduledTotal')}
+            </p>
+            <p className="text-sm sm:text-base font-bold tabular-nums text-rose-500">
+              {mask(formatCurrency(scheduledTotal, displayCurrency, locale))}
+            </p>
+          </div>
+        </div>
+        <div className="p-0">
+          {scheduledLoading ? (
+            <div className="p-6 space-y-3">
+              {Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-10" />)}
+            </div>
+          ) : scheduledData?.items.length === 0 ? (
+            <p className="p-6 text-center text-muted-foreground">{t('accounts.noScheduled')}</p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b">
+                    <th className="px-3 sm:px-4 py-3 text-left font-medium">{t('transactions.date')}</th>
+                    <th className="px-3 sm:px-4 py-3 text-left font-medium">{t('transactions.description')}</th>
+                    <th className="px-4 py-3 text-left font-medium hidden md:table-cell">{t('transactions.category')}</th>
+                    <th className="px-3 sm:px-4 py-3 text-right font-medium">{t('transactions.amount')}</th>
+                    <th className="px-3 sm:px-4 py-3 text-right font-medium">{t('accounts.scheduledStatus')}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {scheduledData?.items.map((tx) => {
+                    const isPending = tx.status === 'pending'
+                    const isIgnored = tx.is_ignored
+                    const { title, subtitle } = scheduleDisplay(tx)
+                    return (
+                      <tr
+                        key={tx.id}
+                        className={`border-b last:border-0 transition-colors ${isPending ? 'opacity-60' : ''} ${canWrite ? 'hover:bg-muted cursor-pointer' : ''}`}
+                        onClick={() => {
+                          if (canWrite) {
+                            setEditingTx(tx)
+                            setDialogOpen(true)
+                          }
+                        }}
+                      >
+                        <td className="px-3 sm:px-4 py-3 text-xs text-muted-foreground whitespace-nowrap">
+                          {formatDateStr(tx.date, dateLocale)}
+                        </td>
+                        <td className="px-3 sm:px-4 py-3">
+                          <div className="flex items-center gap-1.5">
+                            <span className="font-semibold text-foreground text-sm flex-1 min-w-0 truncate">{title}</span>
+                            <span className="flex items-center gap-1.5 shrink-0">
+                              {isIgnored && (
+                                <span title={t('transactions.ignored')}>
+                                  <EyeClosed size={14} className="shrink-0 text-muted-foreground" />
+                                </span>
+                              )}
+                            </span>
+                          </div>
+                          {subtitle && (
+                            <p className="text-xs text-muted-foreground mt-0.5 truncate">{subtitle}</p>
+                          )}
+                        </td>
+                        <td className="px-4 py-3 hidden md:table-cell text-left">
+                          {tx.category ? (
+                            <span className="inline-flex items-center justify-start gap-1.5">
+                              <CategoryIcon icon={tx.category.icon} color={tx.category.color} size="sm" />
+                              <span className="text-sm text-muted-foreground">{tx.category.name}</span>
+                            </span>
+                          ) : (
+                            <span className="text-muted-foreground">—</span>
+                          )}
+                        </td>
+                        <td className={`px-3 sm:px-4 py-3 text-right text-xs sm:text-sm font-semibold tabular-nums ${tx.is_ignored ? 'text-gray-500' : tx.type === 'credit' ? 'text-emerald-600' : 'text-rose-500'}`}>
+                          {mask(`${tx.is_ignored ? ' ' : tx.type === 'credit' ? '+' : '-'}${formatCurrency(Math.abs(Number(tx.amount)), tx.currency, locale)}`)}
+                          {tx.currency !== userCurrency && tx.amount_primary != null && (
+                            <span className="block text-[10px] text-muted-foreground tabular-nums">
+                              {mask(formatCurrency(Math.abs(tx.amount_primary), userCurrency, locale))}
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-3 sm:px-4 py-3 text-right whitespace-nowrap">
+                          {!isPending && canWrite && (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                markPaidMutation.mutate({ id: tx.id })
+                              }}
+                              disabled={markPaidMutation.isPending}
+                            >
+                              {t('accounts.scheduledPay')}
+                            </Button>
+                          )}
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      </div>
+
       <TransactionDialog
         open={dialogOpen}
         onClose={() => { setDialogOpen(false); setEditingTx(null) }}
@@ -1472,7 +1439,14 @@ export default function AccountDetailPage() {
         accounts={accountsList ?? []}
         onSave={(data) => {
           if (editingTx) {
-            updateMutation.mutate({ id: editingTx.id, ...data })
+            // A transfer shares its custom category across both legs, so a
+            // category change on one leg always cascades to its pair.
+            const payload = editingTx.transfer_pair_id &&
+              Object.prototype.hasOwnProperty.call(data, 'category_id') &&
+              data.category_id !== editingTx.category_id
+              ? { ...data, apply_to_transfer_pair: true }
+              : data
+            updateMutation.mutate({ id: editingTx.id, ...payload })
           }
         }}
         onDelete={editingTx ? () => deleteMutation.mutate(editingTx.id) : undefined}

@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useRef } from 'react'
+import { useState, useMemo, useEffect, useLayoutEffect, useRef } from 'react'
 import { useRegisterPageChatContext } from '@/lib/page-chat-context'
 import { getAccountName } from '@/lib/account-utils'
 import { AccountIcon } from '@/components/account-icon'
@@ -12,13 +12,6 @@ import { transactions, categories as categoriesApi, categoryGroups as categoryGr
 import { invalidateFinancialQueries } from '@/lib/invalidate-queries'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
-import {
-  Dialog,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog'
 import {
   Select,
   SelectContent,
@@ -35,7 +28,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { Skeleton } from '@/components/ui/skeleton'
-import { AlertTriangle, ArrowLeftRight, ArrowUp, ArrowDown, Check, Copy, Download, HelpCircle, Info, MoreHorizontal, Paperclip, Users, X, EyeClosed, SlidersHorizontal } from 'lucide-react'
+import { AlertTriangle, ArrowLeftRight, ArrowRight, ArrowUp, ArrowDown, Check, ChevronDown, Copy, Download, Info, MoreHorizontal, Paperclip, Repeat, RotateCcw, Users, X, EyeClosed, SlidersHorizontal } from 'lucide-react'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -50,7 +43,7 @@ import { CategoryIcon } from '@/components/category-icon'
 import { CategorySelect } from '@/components/category-select'
 import { TransactionDialog, extractApiError, type SaveAction } from '@/components/transaction-dialog'
 import { TransactionsColumnPicker } from '@/components/transactions-column-picker'
-import { type ColumnDef, type ColumnId, useTransactionsGridState } from '@/components/transactions-grid-columns'
+import { DESCRIPTION_MIN_WIDTH, DESCRIPTION_MAX_WIDTH, FLEXIBLE_COL_ID, type ColumnDef, type ColumnId, useTransactionsGridState } from '@/components/transactions-grid-columns'
 import { TransferDialog } from '@/components/transfer-dialog'
 import { LinkTransferDialog } from '@/components/link-transfer-dialog'
 import { BulkAddToGroupDialog, type BulkAddToGroupSubmission } from '@/components/bulk-add-to-group-dialog'
@@ -64,10 +57,18 @@ type TransactionUpdatePayload = Partial<Transaction> & {
   apply_to_transfer_pair?: boolean
 }
 
-type PendingTransferCategoryUpdate = {
-  id: string
-  data: TransactionUpdatePayload
+/** A transfer pair merged into a single "Origem ➔ Destino" row (All Accounts). */
+type TransferPairRow = {
+  kind: 'transfer-pair'
+  key: string
+  pairId: string
+  legIds: [string, string]
+  debit: Transaction
+  credit: Transaction
+  shared: boolean
 }
+
+type DisplayRow = (Transaction & { kind?: 'transaction' }) | TransferPairRow
 
 function formatCurrency(value: number, currency = 'USD', locale = 'en-US') {
   return new Intl.NumberFormat(locale, { style: 'currency', currency }).format(value)
@@ -94,7 +95,7 @@ export default function TransactionsPage() {
   const [page, setPage] = useState(1)
   const [limit, setLimit] = useState<number>(() => {
     try {
-      const stored = localStorage.getItem('securo.transactions.pageSize')
+      const stored = localStorage.getItem('talisma.transactions.pageSize')
       return stored ? Number(stored) : 20
     } catch {
       return 20
@@ -132,8 +133,6 @@ export default function TransactionsPage() {
   const [searchQuery, setSearchQuery] = useState(() => searchParams.get('q') ?? '')
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editingTx, setEditingTx] = useState<Transaction | null>(null)
-  const [pendingTransferCategoryUpdate, setPendingTransferCategoryUpdate] =
-    useState<PendingTransferCategoryUpdate | null>(null)
   const [formResetKey, setFormResetKey] = useState(0)
   const [duplicateDraft, setDuplicateDraft] = useState<Partial<Transaction> | null>(null)
   const [filterPayee, setFilterPayee] = useState<string>(searchParams.get('payee_id') ?? '')
@@ -306,15 +305,15 @@ export default function TransactionsPage() {
     if (!el) return
     const raf = requestAnimationFrame(() => {
       el.scrollIntoView({ behavior: 'smooth', block: 'center' })
-      el.classList.add('securo-highlight-flash')
+      el.classList.add('talisma-highlight-flash')
     })
     const timer = setTimeout(() => {
-      el.classList.remove('securo-highlight-flash')
+      el.classList.remove('talisma-highlight-flash')
     }, 2500)
     return () => {
       cancelAnimationFrame(raf)
       clearTimeout(timer)
-      el.classList.remove('securo-highlight-flash')
+      el.classList.remove('talisma-highlight-flash')
     }
   }, [highlightId, searchQuery, filterPayee, filterCategoryIds, page])
 
@@ -489,7 +488,7 @@ export default function TransactionsPage() {
       }
       return created
     },
-    onSuccess: (created) => {
+    onSuccess: () => {
       invalidateAfterTxMutation()
       toast.success(t('transactions.created'))
       setDialogOpen(false)
@@ -507,6 +506,29 @@ export default function TransactionsPage() {
       setDialogOpen(false)
       setEditingTx(null)
       toast.success(t('transactions.updated'))
+    },
+    onError: (error) => {
+      toast.error(extractApiError(error))
+    },
+  })
+
+  const markPaidMutation = useMutation({
+    mutationFn: ({ id }: { id: string }) =>
+      transactions.update(id, { status: 'posted' }),
+    onSuccess: () => {
+      invalidateAfterTxMutation()
+      toast.success(t('transactions.paid'))
+    },
+    onError: (error) => {
+      toast.error(extractApiError(error))
+    },
+  })
+
+  const revertToScheduledMutation = useMutation({
+    mutationFn: ({ id }: { id: string }) =>
+      transactions.update(id, { status: 'scheduled' }),
+    onSuccess: () => {
+      invalidateAfterTxMutation()
     },
     onError: (error) => {
       toast.error(extractApiError(error))
@@ -703,20 +725,85 @@ export default function TransactionsPage() {
   // Tag filtering is now applied server-side, so the visible list and the
   // page count both reflect the same filtered total — issue #88.
   const filteredItems = data?.items ?? []
-  const selectableItems = filteredItems.filter(tx => !tx.is_shared)
+
+  // Transfer pairs collapse into a single "Origem ➔ Destino" row in the All
+  // Accounts view. Only merged when both legs are present on the current page
+  // (an account filter showing just one leg keeps the individual row).
+  const pairRowsById = useMemo(() => {
+    const map = new Map<string, TransferPairRow>()
+    const items = data?.items ?? []
+    for (const tx of items) {
+      if (!tx.transfer_pair_id) continue
+      if (map.has(tx.transfer_pair_id)) continue
+      const partner = items.find(t => t.transfer_pair_id === tx.transfer_pair_id && t.id !== tx.id)
+      if (!partner) continue
+      const debit = tx.type === 'debit' ? tx : partner
+      const credit = tx.type === 'credit' ? tx : partner
+      map.set(tx.transfer_pair_id, {
+        kind: 'transfer-pair',
+        key: `pair-${tx.transfer_pair_id}`,
+        pairId: tx.transfer_pair_id,
+        legIds: [debit.id, credit.id],
+        debit,
+        credit,
+        shared: !!(debit.is_shared || credit.is_shared),
+      })
+    }
+    return map
+  }, [data?.items])
+
+  const displayRows = useMemo<DisplayRow[]>(() => {
+    const items = data?.items ?? []
+    if (pairRowsById.size === 0) return items
+    const rows: DisplayRow[] = []
+    const consumed = new Set<string>()
+    for (const tx of items) {
+      if (consumed.has(tx.id)) continue
+      if (tx.transfer_pair_id) {
+        const pair = pairRowsById.get(tx.transfer_pair_id)
+        if (pair) {
+          rows.push(pair)
+          pair.legIds.forEach(id => consumed.add(id))
+          continue
+        }
+      }
+      rows.push(tx)
+    }
+    return rows
+  }, [data?.items, pairRowsById])
+
+  const rowIds = (row: DisplayRow): string[] =>
+    row.kind === 'transfer-pair' ? row.legIds : [row.id]
+  const rowShared = (row: DisplayRow): boolean =>
+    row.kind === 'transfer-pair' ? row.shared : !!row.is_shared
+  const rowSelected = (row: DisplayRow): boolean => rowIds(row).every(id => selectedIds.has(id))
+  const rowSomeSelected = (row: DisplayRow): boolean => rowIds(row).some(id => selectedIds.has(id))
+
+  const toggleRow = (row: DisplayRow) => {
+    const ids = rowIds(row)
+    setSelectedIds(prev => {
+      const selected = ids.every(id => prev.has(id))
+      const next = new Set(prev)
+      if (selected) ids.forEach(id => next.delete(id))
+      else ids.forEach(id => next.add(id))
+      return next
+    })
+    setLastSelectedId(ids[ids.length - 1])
+  }
+
+  const selectableRows = displayRows.filter(row => !rowShared(row))
+
+  const allSelected = selectableRows.length > 0 && selectableRows.every(row => rowSelected(row))
+  const someSelected = selectableRows.some(row => rowSomeSelected(row)) && !allSelected
 
   const toggleSelectAll = () => {
-    if (!selectableItems.length) return
-    const allSelected = selectableItems.every(tx => selectedIds.has(tx.id))
+    if (!selectableRows.length) return
     if (allSelected) {
       setSelectedIds(new Set())
     } else {
-      setSelectedIds(new Set(selectableItems.map(tx => tx.id)))
+      setSelectedIds(new Set(selectableRows.flatMap(rowIds)))
     }
   }
-
-  const allSelected = selectableItems.length > 0 && selectableItems.every(tx => selectedIds.has(tx.id))
-  const someSelected = selectableItems.some(tx => selectedIds.has(tx.id)) && !allSelected
 
   // Net total of the currently-selected rows (issue #185). Selection is
   // always page-scoped (cleared on page/filter change), so summing the
@@ -765,19 +852,6 @@ export default function TransactionsPage() {
 
   const totalPages = data ? Math.ceil(data.total / limit) : 0
 
-  const isTransferCategoryPromptOpen = !!pendingTransferCategoryUpdate
-
-  const submitPendingTransferCategoryUpdate = (applyToTransferPair: boolean) => {
-    if (!pendingTransferCategoryUpdate) return
-    const { id, data } = pendingTransferCategoryUpdate
-    updateMutation.mutate({
-      id,
-      ...data,
-      apply_to_transfer_pair: applyToTransferPair,
-    })
-    setPendingTransferCategoryUpdate(null)
-  }
-
   const handleTransactionSave = (
     data: Partial<Transaction>,
     recurringData?: { frequency: string; end_date?: string },
@@ -789,17 +863,16 @@ export default function TransactionsPage() {
       return
     }
 
-    const isTransferCategoryChange =
-      !!editingTx.transfer_pair_id &&
+    // A transfer shares its custom category across both legs, so a category
+    // change on one leg always cascades to its paired transaction.
+    const payload: TransactionUpdatePayload =
+      editingTx.transfer_pair_id &&
       Object.prototype.hasOwnProperty.call(data, 'category_id') &&
       data.category_id !== editingTx.category_id
+        ? { ...data, apply_to_transfer_pair: true }
+        : data
 
-    if (isTransferCategoryChange) {
-      setPendingTransferCategoryUpdate({ id: editingTx.id, data })
-      return
-    }
-
-    updateMutation.mutate({ id: editingTx.id, ...data })
+    updateMutation.mutate({ id: editingTx.id, ...payload })
   }
 
   const handleCreateInstallments = (
@@ -895,19 +968,62 @@ export default function TransactionsPage() {
     window.addEventListener('pointerup', onUp)
   }
 
+  // Column widths: every column except Description renders at a fixed px
+  // width; Description is the table's single flexible column and absorbs the
+  // remaining space, capped at DESCRIPTION_MAX_WIDTH. table-layout: fixed
+  // ignores min/max-width on cells, so the cap is applied by measuring the
+  // container and setting an explicit width on the Description column; the
+  // leftover space is then redistributed proportionally to the fixed columns
+  // (so Description never grows unbounded while Category/Account/Date still
+  // gain room on wide viewports). On a 1366x768 viewport (~1030px usable) the
+  // fixed columns sum to ~671px, so Description gets ~320px and Category
+  // ~160px. The table stays w-full/table-fixed at 100% of the container (no
+  // growing min-width floor), and every cell clips its own overflow, so
+  // nothing ever forces horizontal scroll or paints over a neighbour column.
+  const checkboxColWidth = 36
+  const tableRef = useRef<HTMLDivElement | null>(null)
+  const [tableWidth, setTableWidth] = useState(0)
+  useLayoutEffect(() => {
+    const el = tableRef.current
+    if (!el) return
+    const update = () => setTableWidth(el.clientWidth)
+    update()
+    const ro = new ResizeObserver(update)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [isLoading])
+
+  const fixedCols = grid.visibleColumns.filter(c => c.id !== FLEXIBLE_COL_ID)
+  const fixedSum = fixedCols.reduce((s, c) => s + grid.widthOf(c.id), 0) + checkboxColWidth
+  const descWidth = Math.max(
+    DESCRIPTION_MIN_WIDTH,
+    Math.min(DESCRIPTION_MAX_WIDTH, tableWidth > 0 ? tableWidth - fixedSum : DESCRIPTION_MAX_WIDTH),
+  )
+  const leftover = Math.max(0, tableWidth - fixedSum - descWidth)
+  const fixedBase = fixedSum - checkboxColWidth
+  const growFactor = fixedBase > 0 && leftover > 0 ? (fixedBase + leftover) / fixedBase : 1
+
+  const columnWidthStyle = (col: ColumnDef): React.CSSProperties => {
+    if (col.id === FLEXIBLE_COL_ID) {
+      return { width: descWidth, minWidth: descWidth }
+    }
+    const width = Math.round(grid.widthOf(col.id) * growFactor)
+    return { width, minWidth: width }
+  }
+
   const renderHeaderCell = (col: ColumnDef) => {
     const isSorted = grid.sortBy === col.id
     const sortIndicator = isSorted ? (grid.sortDir === 'asc' ? <ArrowUp size={12} /> : <ArrowDown size={12} />) : null
     const alignClass = col.align === 'right' ? 'text-right' : 'text-left'
     const justify = col.align === 'right' ? 'justify-end' : 'justify-start'
     const cursorClass = col.sortable ? 'cursor-pointer select-none hover:text-foreground' : ''
-    // Match the amount/attachments body cells' pr-5 so right-aligned
+    // Match the amount/attachments body cells' pr-2 so right-aligned
     // headers line up with their values (issue #161 polish).
-    const padX = col.align === 'right' ? 'pr-5' : ''
+    const padX = col.align === 'right' ? 'pr-2' : ''
     return (
       <TableHead
         key={col.id}
-        style={{ width: grid.widthOf(col.id), minWidth: grid.widthOf(col.id) }}
+        style={columnWidthStyle(col)}
         className={`relative text-xs font-medium text-muted-foreground py-3 ${alignClass} ${padX}`}
         onClick={() => { if (col.sortable) grid.toggleSort(col.id) }}
       >
@@ -915,19 +1031,39 @@ export default function TransactionsPage() {
           <span className="truncate">{t(col.labelKey)}</span>
           {sortIndicator}
         </div>
-        <span
-          onPointerDown={(e) => startResize(e, col)}
-          onClick={(e) => e.stopPropagation()}
-          aria-hidden="true"
-          className="absolute right-0 top-0 h-full w-2 -mr-1 cursor-col-resize select-none hover:bg-primary/40 active:bg-primary/60"
-        />
+        {col.id !== FLEXIBLE_COL_ID && (
+          <span
+            onPointerDown={(e) => startResize(e, col)}
+            onClick={(e) => e.stopPropagation()}
+            aria-hidden="true"
+            className="absolute right-0 top-0 h-full w-2 -mr-1 cursor-col-resize select-none hover:bg-primary/40 active:bg-primary/60"
+          />
+        )}
       </TableHead>
     )
   }
 
   const stripHashtags = (notes: string) => notes.replace(/#[\wÀ-ž-]+/g, '').trim()
 
-  const renderAmountCell = (tx: Transaction) => {
+  const renderAmountCell = (row: DisplayRow) => {
+    if (row.kind === 'transfer-pair') {
+      const tx = row.debit
+      return (
+        <>
+          <span className="text-xs md:text-sm font-bold tabular-nums text-muted-foreground">
+            {mask(formatCurrency(Math.abs(Number(tx.amount)), tx.currency, locale))}
+          </span>
+          {tx.amount_primary != null && tx.currency !== userCurrency && (
+            <div className="flex items-center justify-end gap-1">
+              <span className="text-[10px] text-muted-foreground tabular-nums">
+                {mask(formatCurrency(Math.abs(tx.amount_primary), userCurrency, locale))}
+              </span>
+            </div>
+          )}
+        </>
+      )
+    }
+    const tx = row
     const displayAmount = tx.is_shared && tx.viewer_share != null
       ? Number(tx.viewer_share)
       : Number(tx.amount)
@@ -982,64 +1118,64 @@ export default function TransactionsPage() {
     const noteText = tx.notes ? stripHashtags(tx.notes) : ''
     const noteTags = tx.notes ? parseHashtags(tx.notes) : []
     return (
-      <div className="flex items-center gap-2 md:gap-3">
+      <div className="flex items-center gap-2 md:gap-3 min-w-0">
         <CategoryIcon icon={tx.category?.icon} color={tx.category?.color} size="lg" />
         <div className="min-w-0 flex-1 overflow-hidden">
-          <div className="flex items-center gap-2">
-            <p className="text-sm font-semibold text-foreground line-clamp-1">{tx.description}</p>
-            {tx.group_id && (
-              <span
-                className="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-violet-700 bg-violet-50 border border-violet-200 dark:bg-violet-950/40 dark:text-violet-300 dark:border-violet-900 px-1.5 py-0.5 rounded-full"
-                title={t('splitGroups.sharedRowTooltip')}
-              >
-                {tx.is_shared && tx.parent_owner_name
-                  ? t('splitGroups.sharedRowBadgeAuthor', {
-                      author: tx.parent_owner_name,
-                      group: groupNameById.get(tx.group_id) ?? '',
-                    })
-                  : t('splitGroups.ownerRowBadge', {
-                      group: groupNameById.get(tx.group_id) ?? '',
-                    })}
-              </span>
-            )}
-            {!!tx.transfer_pair_id && (
-              <span className="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-blue-600 bg-blue-50 border border-blue-200 px-1.5 py-0.5 rounded-full">
-                <ArrowLeftRight className="h-3 w-3" />
-                {t('transactions.transfer')}
-                <span title={t('transactions.transferTooltip')}><HelpCircle className="h-3 w-3 text-blue-400" /></span>
-              </span>
-            )}
-            {tx.is_ignored && 
-              (
-              <span className="ml-2 inline-flex items-center gap-1 text-xs text-gray-600 font-normal bg-gray-100 border border-gray-200 rounded px-1.5 py-0.5">
-                <EyeClosed className="h-3 w-3" />
-                {t('transactions.ignored')}
-                <span title={t('transactions.ignoreTransferHint')}><HelpCircle className="h-3 w-3 text-blue-400" /></span>
-              </span>
-                            )
-            }
-            {(tx.recurring_transaction_id != null ||
-              recurringList?.some(r => r.description === tx.description && r.type === tx.type)) && (
-              <span
-                className="text-[10px] font-semibold uppercase tracking-wide text-primary bg-primary/5 border border-primary/10 px-1.5 py-0.5 rounded-full"
-                title={tx.recurring_transaction_id != null ? t('transactions.recurringLinkedTooltip') : undefined}
-              >
-                {t('transactions.recurringBadge')}
-              </span>
-            )}
-            {tx.installment_number != null && tx.total_installments != null && (
-              <span
-                className="inline-flex items-center text-[10px] font-bold tabular-nums text-amber-700 dark:text-amber-400 bg-amber-100 dark:bg-amber-500/20 border border-amber-200 dark:border-amber-500/30 px-1.5 py-0.5 rounded-full"
-                title={tx.installment_total_amount != null
-                  ? t('transactions.installmentTooltip', { count: tx.total_installments, total: tx.installment_total_amount })
-                  : undefined}
-              >
-                {tx.installment_number}/{tx.total_installments}
-              </span>
-            )}
-            {(tx.attachment_count ?? 0) > 0 && (
-              <Paperclip size={12} className="text-muted-foreground shrink-0" />
-            )}
+          <div className="flex items-center gap-1.5">
+            <p className="text-sm font-semibold text-foreground flex-1 min-w-0 truncate">{tx.description}</p>
+            <span className="flex items-center gap-1.5 shrink-0">
+              {!!tx.transfer_pair_id && (
+                <span title={t('transactions.transferTooltip')}>
+                  <ArrowLeftRight size={14} className="shrink-0 text-blue-600" />
+                </span>
+              )}
+              {tx.is_ignored && (
+                <span title={t('transactions.ignored')}>
+                  <EyeClosed size={14} className="shrink-0 text-muted-foreground" />
+                </span>
+              )}
+              {(tx.recurring_transaction_id != null ||
+                recurringList?.some(r => r.description === tx.description && r.type === tx.type)) && (
+                <span
+                  title={
+                    tx.recurring_transaction_id != null
+                      ? t('transactions.recurringLinkedTooltip')
+                      : t('transactions.recurringBadge')
+                  }
+                >
+                  <Repeat size={14} className="shrink-0 text-primary" />
+                </span>
+              )}
+              {tx.group_id && (
+                <span
+                  title={
+                    tx.is_shared && tx.parent_owner_name
+                      ? t('splitGroups.sharedRowBadgeAuthor', {
+                          author: tx.parent_owner_name,
+                          group: groupNameById.get(tx.group_id) ?? '',
+                        })
+                      : t('splitGroups.ownerRowBadge', {
+                          group: groupNameById.get(tx.group_id) ?? '',
+                        })
+                  }
+                >
+                  <Users size={14} className="shrink-0 text-violet-600" />
+                </span>
+              )}
+              {tx.installment_number != null && tx.total_installments != null && (
+                <span
+                  className="inline-flex items-center text-[10px] font-bold tabular-nums text-amber-700 dark:text-amber-400 bg-amber-100 dark:bg-amber-500/20 border border-amber-200 dark:border-amber-500/30 px-1.5 py-0.5 rounded-full shrink-0"
+                  title={tx.installment_total_amount != null
+                    ? t('transactions.installmentTooltip', { count: tx.total_installments, total: tx.installment_total_amount })
+                    : undefined}
+                >
+                  {tx.installment_number}/{tx.total_installments}
+                </span>
+              )}
+              {(tx.attachment_count ?? 0) > 0 && (
+                <Paperclip size={12} className="text-muted-foreground shrink-0" />
+              )}
+            </span>
           </div>
           {showInlineDate && (
             <p className="text-xs text-muted-foreground mt-0.5">{new Date(tx.date + 'T00:00:00').toLocaleDateString(dateLocale)}</p>
@@ -1069,41 +1205,167 @@ export default function TransactionsPage() {
     )
   }
 
-  const renderBodyCell = (col: ColumnDef, tx: Transaction) => {
-    const widthStyle = { width: grid.widthOf(col.id), minWidth: grid.widthOf(col.id) }
+  const renderStatusCell = (tx: Transaction) => {
+    const editable = canWrite && !tx.is_shared
+    return (
+      <div className="flex items-center gap-1">
+        {tx.status === 'scheduled' ? (
+          editable ? (
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-6 px-2 text-xs"
+              onClick={(e) => {
+                e.stopPropagation()
+                markPaidMutation.mutate({ id: tx.id })
+              }}
+            >
+              <Check size={12} className="mr-1" />
+              {t('transactions.markPaid')}
+            </Button>
+          ) : (
+            <span className="text-muted-foreground">{t('transactions.statusScheduled')}</span>
+          )
+        ) : (
+          <span className="text-muted-foreground capitalize">
+            {tx.status === 'pending'
+              ? t('transactions.statusPending')
+              : t('transactions.statusPosted')}
+          </span>
+        )}
+        {editable && tx.status === 'posted' && (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                aria-label={t('transactions.undo')}
+                className="h-6 w-6 flex items-center justify-center rounded-md border border-border bg-card text-muted-foreground hover:bg-muted/50 hover:text-foreground transition-colors cursor-pointer"
+              >
+                <ChevronDown size={12} />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={(e) => { e.stopPropagation(); revertToScheduledMutation.mutate({ id: tx.id }) }}>
+                <RotateCcw size={12} className="mr-2" />
+                {t('transactions.undo')}
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
+      </div>
+    )
+  }
+
+  const renderPairStatusCell = (pair: TransferPairRow) => {
+    const statuses = new Set([pair.debit.status, pair.credit.status])
+    const combined = statuses.size === 1
+      ? pair.debit.status
+      : statuses.has('scheduled')
+        ? 'scheduled'
+        : 'pending'
+    const editable = canWrite && !pair.shared
+    return (
+      <div className="flex items-center gap-1">
+        {combined === 'scheduled' ? (
+          editable ? (
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-6 px-2 text-xs"
+              onClick={(e) => {
+                e.stopPropagation()
+                pair.legIds.forEach((id) => markPaidMutation.mutate({ id }))
+              }}
+            >
+              <Check size={12} className="mr-1" />
+              {t('transactions.markPaid')}
+            </Button>
+          ) : (
+            <span className="text-muted-foreground">{t('transactions.statusScheduled')}</span>
+          )
+        ) : (
+          <span className="text-muted-foreground capitalize">
+            {combined === 'pending'
+              ? t('transactions.statusPending')
+              : t('transactions.statusPosted')}
+          </span>
+        )}
+        {editable && combined === 'posted' && (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                aria-label={t('transactions.undo')}
+                className="h-6 w-6 flex items-center justify-center rounded-md border border-border bg-card text-muted-foreground hover:bg-muted/50 hover:text-foreground transition-colors cursor-pointer"
+              >
+                <ChevronDown size={12} />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={(e) => { e.stopPropagation(); pair.legIds.forEach((id) => revertToScheduledMutation.mutate({ id })) }}>
+                <RotateCcw size={12} className="mr-2" />
+                {t('transactions.undo')}
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
+      </div>
+    )
+  }
+
+  const renderBodyCell = (col: ColumnDef, row: DisplayRow) => {
+    const isPair = row.kind === 'transfer-pair'
+    const tx: Transaction = isPair ? row.debit : row
+    const widthStyle = columnWidthStyle(col)
     const alignClass = col.align === 'right' ? 'text-right' : ''
     const baseClass = `py-2.5 ${alignClass}`
     switch (col.id) {
       case 'date':
         return (
-          <TableCell key={col.id} style={widthStyle} className={`${baseClass} text-sm text-muted-foreground tabular-nums`}>
+          <TableCell key={col.id} style={widthStyle} className={`${baseClass} min-w-0 overflow-hidden text-sm text-muted-foreground tabular-nums`}>
             {new Date(tx.date + 'T00:00:00').toLocaleDateString(dateLocale)}
           </TableCell>
         )
       case 'description':
         return (
-          <TableCell key={col.id} style={widthStyle} className={`${baseClass} pl-2 max-w-0 overflow-hidden whitespace-normal`}>
+          <TableCell key={col.id} style={widthStyle} className={`${baseClass} pl-2 min-w-0 overflow-hidden whitespace-normal`}>
             {renderDescriptionCell(tx)}
           </TableCell>
         )
       case 'category':
         return (
-          <TableCell key={col.id} style={widthStyle} className={baseClass}>
+          <TableCell key={col.id} style={widthStyle} className={`${baseClass} min-w-0 overflow-hidden text-left`}>
             {tx.category ? (
-              <span className="text-sm text-muted-foreground">{tx.category.name}</span>
+              <span className="inline-flex items-center justify-start gap-1.5 text-sm text-muted-foreground min-w-0">
+                <CategoryIcon icon={tx.category.icon} color={tx.category.color} size="sm" />
+                <span className="truncate min-w-0">{tx.category.name}</span>
+              </span>
             ) : (
               <span className="text-xs text-muted-foreground italic">{t('transactions.noCategory')}</span>
             )}
           </TableCell>
         )
       case 'account': {
+        if (isPair) {
+          const fromAcc = accountsList?.find((a) => a.id === row.debit.account_id)
+          const toAcc = accountsList?.find((a) => a.id === row.credit.account_id)
+          return (
+            <TableCell key={col.id} style={widthStyle} className={`${baseClass} min-w-0 overflow-hidden text-sm text-muted-foreground`}>
+              <span className="inline-flex items-center gap-1 min-w-0" title={t('transactions.transferTooltip')}>
+                <span className="truncate min-w-0" title={fromAcc ? getAccountName(fromAcc) : undefined}>{fromAcc ? getAccountName(fromAcc) : '—'}</span>
+                <ArrowRight size={12} className="shrink-0 text-muted-foreground" />
+                <span className="truncate min-w-0" title={toAcc ? getAccountName(toAcc) : undefined}>{toAcc ? getAccountName(toAcc) : '—'}</span>
+              </span>
+            </TableCell>
+          )
+        }
         const acc = accountsList?.find((a) => a.id === tx.account_id)
         return (
-          <TableCell key={col.id} style={widthStyle} className={`${baseClass} text-sm text-muted-foreground`}>
+          <TableCell key={col.id} style={widthStyle} className={`${baseClass} min-w-0 overflow-hidden text-sm text-muted-foreground`}>
             {acc ? (
               <span className="flex items-center gap-2 min-w-0">
                 <AccountIcon account={acc} size="sm" />
-                <span className="truncate">{getAccountName(acc)}</span>
+                <span className="truncate min-w-0" title={getAccountName(acc)}>{getAccountName(acc)}</span>
               </span>
             ) : (
               <span className="text-muted-foreground">—</span>
@@ -1113,20 +1375,20 @@ export default function TransactionsPage() {
       }
       case 'amount':
         return (
-          <TableCell key={col.id} style={widthStyle} className={`${baseClass} pr-5`}>
-            {renderAmountCell(tx)}
+          <TableCell key={col.id} style={widthStyle} className={`${baseClass} pr-2 min-w-0 overflow-hidden`}>
+            {renderAmountCell(row)}
           </TableCell>
         )
       case 'payee':
         return (
-          <TableCell key={col.id} style={widthStyle} className={`${baseClass} text-sm text-muted-foreground`}>
+          <TableCell key={col.id} style={widthStyle} className={`${baseClass} min-w-0 overflow-hidden text-sm text-muted-foreground`}>
             {tx.payee_name ?? tx.payee ?? <span className="text-muted-foreground">—</span>}
           </TableCell>
         )
       case 'notes': {
         const text = tx.notes ? stripHashtags(tx.notes) : ''
         return (
-          <TableCell key={col.id} style={widthStyle} className={`${baseClass} text-xs text-muted-foreground italic max-w-0 overflow-hidden whitespace-normal line-clamp-2`}>
+          <TableCell key={col.id} style={widthStyle} className={`${baseClass} min-w-0 overflow-hidden text-xs text-muted-foreground italic whitespace-normal line-clamp-2`}>
             {text || <span className="not-italic">—</span>}
           </TableCell>
         )
@@ -1134,7 +1396,7 @@ export default function TransactionsPage() {
       case 'tags': {
         const tags = tx.notes ? parseHashtags(tx.notes) : []
         return (
-          <TableCell key={col.id} style={widthStyle} className={baseClass}>
+          <TableCell key={col.id} style={widthStyle} className={`${baseClass} min-w-0 overflow-hidden`}>
             {tags.length === 0 ? (
               <span className="text-muted-foreground">—</span>
             ) : (
@@ -1155,7 +1417,7 @@ export default function TransactionsPage() {
       }
       case 'attachments':
         return (
-          <TableCell key={col.id} style={widthStyle} className={`${baseClass} pr-5 text-sm text-muted-foreground tabular-nums`}>
+          <TableCell key={col.id} style={widthStyle} className={`${baseClass} pr-2 min-w-0 overflow-hidden text-sm text-muted-foreground tabular-nums`}>
             {(tx.attachment_count ?? 0) > 0 ? (
               <span className="inline-flex items-center gap-1 justify-end w-full">
                 <Paperclip size={12} />{tx.attachment_count}
@@ -1164,8 +1426,15 @@ export default function TransactionsPage() {
           </TableCell>
         )
       case 'type':
+        if (isPair) {
+          return (
+            <TableCell key={col.id} style={widthStyle} className={`${baseClass} min-w-0 overflow-hidden text-sm`}>
+              <span className="text-muted-foreground">{t('transactions.transfer')}</span>
+            </TableCell>
+          )
+        }
         return (
-          <TableCell key={col.id} style={widthStyle} className={`${baseClass} text-sm`}>
+          <TableCell key={col.id} style={widthStyle} className={`${baseClass} min-w-0 overflow-hidden text-sm`}>
             <span className={tx.type === 'credit' ? 'text-emerald-600' : 'text-rose-500'}>
               {tx.type === 'credit' ? t('transactions.typeIncome') : t('transactions.typeExpense')}
             </span>
@@ -1173,10 +1442,8 @@ export default function TransactionsPage() {
         )
       case 'status':
         return (
-          <TableCell key={col.id} style={widthStyle} className={`${baseClass} text-sm text-muted-foreground capitalize`}>
-            {tx.status === 'pending'
-              ? t('transactions.statusPending')
-              : t('transactions.statusPosted')}
+          <TableCell key={col.id} style={widthStyle} className={`${baseClass} min-w-0 overflow-hidden text-sm`}>
+            {isPair ? renderPairStatusCell(row) : renderStatusCell(tx)}
           </TableCell>
         )
     }
@@ -1208,7 +1475,7 @@ export default function TransactionsPage() {
           // phone (#257). On desktop the secondary actions (Columns, Export,
           // Duplicate, Transfer) are inline labelled buttons; on mobile they
           // collapse into the overflow menu so the row stays uncrowded.
-          <div className="flex items-center gap-2 sm:flex-wrap sm:justify-end">
+          <div className="flex items-center gap-2 flex-wrap justify-end">
             <MonthStepper
               value={steppedMonth}
               onChange={handleMonthChange}
@@ -1388,11 +1655,11 @@ export default function TransactionsPage() {
             ))}
           </div>
         ) : (
-          <div className="overflow-x-auto">
-          <Table style={{ tableLayout: 'fixed' }}>
+          <div className="w-full max-w-full" ref={tableRef}>
+          <Table style={{ tableLayout: 'fixed', minWidth: 0 }}>
             <TableHeader>
               <TableRow className="border-b border-border hover:bg-transparent">
-                <TableHead style={{ width: 40, minWidth: 40 }} className="py-3 pl-4 pr-0">
+                <TableHead style={{ width: checkboxColWidth, minWidth: checkboxColWidth }} className="py-3 pl-2 pr-0">
                   {canWrite && (
                     <input
                       type="checkbox"
@@ -1407,45 +1674,56 @@ export default function TransactionsPage() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {filteredItems.map((tx) => (
-                <TableRow
-                  key={tx.id}
-                  ref={tx.id === highlightId ? highlightedRowRef : undefined}
-                  className={`hover:bg-muted border-b border-border last:border-0 ${
-                    selectedIds.has(tx.id) ? 'bg-primary/5' : ''
-                  } ${tx.is_shared || !canWrite ? 'cursor-default' : 'cursor-pointer'}`}
-                  onClick={() => {
-                    if (tx.is_shared) {
-                      // Owned by another user — view in the group context instead.
-                      if (tx.group_id) navigate(`/groups/${tx.group_id}`)
-                      return
-                    }
-                    if (!canWrite) return
-                    setEditingTx(tx)
-                    setDialogOpen(true)
-                  }}
-                >
-                  <TableCell style={{ width: 40, minWidth: 40 }} className="py-2.5 pl-4 pr-0">
-                    {/* Bulk operations are scoped to user.id so they
-                        silently skip shared rows — hide the checkbox
-                        on those to avoid the dead-end UX. */}
-                    {canWrite && !tx.is_shared && (
-                      <input
-                        type="checkbox"
-                        checked={selectedIds.has(tx.id)}
-                        onChange={() => {}}
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          toggleSelect(tx.id, e.shiftKey)
-                        }}
-                        className="h-4 w-4 rounded border-border accent-primary cursor-pointer"
-                      />
-                    )}
-                  </TableCell>
-                  {grid.visibleColumns.map(col => renderBodyCell(col, tx))}
-                </TableRow>
-              ))}
-              {filteredItems.length === 0 && (
+              {displayRows.map((row) => {
+                const tx: Transaction = row.kind === 'transfer-pair' ? row.debit : row
+                const shared = rowShared(row)
+                const rowIsSelected = rowSelected(row)
+                return (
+                  <TableRow
+                    key={row.kind === 'transfer-pair' ? row.key : row.id}
+                    ref={tx.id === highlightId ? highlightedRowRef : undefined}
+                    className={`hover:bg-muted border-b border-border last:border-0 ${
+                      rowIsSelected ? 'bg-primary/5' : ''
+                    } ${shared || !canWrite ? 'cursor-default' : 'cursor-pointer'}`}
+                    onClick={() => {
+                      if (shared) {
+                        // Owned by another user — view in the group context instead.
+                        if (tx.group_id) navigate(`/groups/${tx.group_id}`)
+                        return
+                      }
+                      if (!canWrite) return
+                      setEditingTx(tx)
+                      setDialogOpen(true)
+                    }}
+                  >
+                    <TableCell style={{ width: checkboxColWidth, minWidth: checkboxColWidth }} className="py-2.5 pl-2 pr-0">
+                      {/* Bulk operations are scoped to user.id so they
+                          silently skip shared rows — hide the checkbox
+                          on those to avoid the dead-end UX. */}
+                      {canWrite && !shared && (
+                        <input
+                          type="checkbox"
+                          checked={rowIsSelected}
+                          ref={(el) => {
+                            if (el && row.kind === 'transfer-pair') {
+                              el.indeterminate = rowSomeSelected(row) && !rowIsSelected
+                            }
+                          }}
+                          onChange={() => {}}
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            if (row.kind === 'transfer-pair') toggleRow(row)
+                            else toggleSelect(tx.id, e.shiftKey)
+                          }}
+                          className="h-4 w-4 rounded border-border accent-primary cursor-pointer"
+                        />
+                      )}
+                    </TableCell>
+                    {grid.visibleColumns.map(col => renderBodyCell(col, row))}
+                  </TableRow>
+                )
+              })}
+              {displayRows.length === 0 && (
                 <TableRow>
                   <TableCell colSpan={grid.visibleColumns.length + 1} className="text-center py-16 text-muted-foreground">
                     {t('transactions.noResults')}
@@ -1458,7 +1736,7 @@ export default function TransactionsPage() {
         )}
         {/* Filtered summary (issue #185): income / expenses / net across
             ALL rows matching the active filters — not just this page. */}
-        {!isLoading && data?.summary && filteredItems.length > 0 && (
+        {!isLoading && data?.summary && displayRows.length > 0 && (
           <div className="flex flex-wrap items-center gap-x-5 gap-y-1 border-t border-border bg-muted/30 px-4 py-2.5">
             <span className="mr-auto text-xs text-muted-foreground">
               {t('transactions.summaryCount', { count: data.total })}
@@ -1538,7 +1816,7 @@ export default function TransactionsPage() {
                 setLimit(nextLimit)
                 setPage(1)
                 try {
-                  localStorage.setItem('securo.transactions.pageSize', String(nextLimit))
+                  localStorage.setItem('talisma.transactions.pageSize', String(nextLimit))
                 } catch {
                   // ignored
                 }
@@ -1772,7 +2050,6 @@ export default function TransactionsPage() {
           setDialogOpen(false)
           setEditingTx(null)
           setDuplicateDraft(null)
-          setPendingTransferCategoryUpdate(null)
           // Drop any prior mutation error so reopening the dialog
           // doesn't surface a stale message (issue #155).
           createMutation.reset()
@@ -1800,48 +2077,6 @@ export default function TransactionsPage() {
         error={createMutation.error || createInstallmentsMutation.error || updateMutation.error ? extractApiError(createMutation.error || createInstallmentsMutation.error || updateMutation.error) : null}
         isSynced={editingTx?.source === 'sync'}
       />
-
-      <Dialog
-        open={isTransferCategoryPromptOpen}
-        onOpenChange={(open) => {
-          if (!open) setPendingTransferCategoryUpdate(null)
-        }}
-      >
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>{t('transactions.confirmTransferCategoryTitle')}</DialogTitle>
-          </DialogHeader>
-          <p className="text-sm text-muted-foreground">
-            {t('transactions.confirmTransferCategoryDesc')}
-          </p>
-          <DialogFooter className="flex-row flex-nowrap items-center justify-end gap-2 sm:space-x-0">
-            <Button
-              className="shrink-0"
-              variant="outline"
-              onClick={() => setPendingTransferCategoryUpdate(null)}
-            >
-              {t('common.cancel')}
-            </Button>
-            <Button
-              className="min-w-0 flex-1 truncate"
-              variant="outline"
-              onClick={() => submitPendingTransferCategoryUpdate(false)}
-              disabled={updateMutation.isPending}
-            >
-              {t('transactions.confirmTransferCategorySingle')}
-            </Button>
-            <Button
-              className="min-w-0 flex-1 truncate"
-              onClick={() => submitPendingTransferCategoryUpdate(true)}
-              disabled={updateMutation.isPending}
-            >
-              {updateMutation.isPending
-                ? t('common.loading')
-                : t('transactions.confirmTransferCategoryBoth')}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
 
       {/* Create Rule from Transaction Dialog */}
       <RuleDialog

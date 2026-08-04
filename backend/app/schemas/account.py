@@ -96,6 +96,7 @@ class AccountSummary(BaseModel):
     current_balance: float
     monthly_income: float
     monthly_expenses: float
+    scheduled_expenses: float = 0.0
     current_balance_primary: Optional[float] = None
     monthly_income_primary: Optional[float] = None
     monthly_expenses_primary: Optional[float] = None

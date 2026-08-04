@@ -83,6 +83,7 @@ async def get_transactions(
     account_types: Optional[list[str]] = None,
     include_summary: bool = False,
     user_pnl_only: bool = False,
+    statuses: Optional[list[str]] = None,
 ) -> tuple[list[Transaction], int, Optional[dict]]:
     """List transactions for a workspace.
 
@@ -219,6 +220,11 @@ async def get_transactions(
         base_query = base_query.where(Account.is_closed == False, counts_as_user_pnl())
     if txn_type:
         base_query = base_query.where(Transaction.type == txn_type)
+    if statuses:
+        # Lifecycle status filter (posted / pending / scheduled). Used by the
+        # bank-statement view to split the main list (posted only) from the
+        # "Agendamentos" section (pending + scheduled).
+        base_query = base_query.where(Transaction.status.in_(statuses))
     if currency:
         # Native-currency filter — match the column verbatim. Lets agents
         # answer "do I have any EUR transactions?" without text-searching
@@ -731,8 +737,8 @@ async def create_installment_plan(
     account = account_result.scalar_one_or_none()
     if not account:
         raise ValueError("Account not found")
-    if account.type != "credit_card":
-        raise ValueError("Installment plans require a credit-card account")
+    if account.type not in ("credit_card", "checking", "savings"):
+        raise ValueError("Installment plans require credit_card, checking, or savings accounts")
 
     currency = data.currency or account.currency
     n = data.num_installments
@@ -763,9 +769,10 @@ async def create_installment_plan(
             installment_total_amount=total,
             installment_purchase_date=data.purchase_date,
         )
-        if data.effective_bill_date:
-            tx.effective_bill_date = data.effective_bill_date
-        apply_effective_date(tx, account)
+        if account.type == "credit_card":
+            if data.effective_bill_date:
+                tx.effective_bill_date = data.effective_bill_date
+            apply_effective_date(tx, account)
         session.add(tx)
         transactions.append(tx)
 
@@ -1295,10 +1302,31 @@ async def bulk_update_category(
     transaction_ids: list[uuid.UUID],
     category_id: Optional[uuid.UUID] = None,
 ) -> int:
+    # A transfer shares its custom category across both legs, so when any leg
+    # is selected the paired transaction gets the same category too.
+    pair_result = await session.execute(
+        select(Transaction.transfer_pair_id).where(
+            Transaction.workspace_id == workspace_id,
+            Transaction.id.in_(transaction_ids),
+            Transaction.transfer_pair_id.is_not(None),
+        )
+    )
+    pair_ids = [pid for (pid,) in pair_result.all() if pid is not None]
+
+    expanded = set(transaction_ids)
+    if pair_ids:
+        paired_result = await session.execute(
+            select(Transaction.id).where(
+                Transaction.workspace_id == workspace_id,
+                Transaction.transfer_pair_id.in_(pair_ids),
+            )
+        )
+        expanded.update(pid for (pid,) in paired_result.all())
+
     result = await session.execute(
         update(Transaction)
         .where(
-            Transaction.id.in_(transaction_ids),
+            Transaction.id.in_(expanded),
             Transaction.workspace_id == workspace_id,
         )
         .values(category_id=category_id)

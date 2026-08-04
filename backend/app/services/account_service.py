@@ -3,7 +3,7 @@ from datetime import date as _Date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Optional
 
-from sqlalchemy import case, func, select, or_
+from sqlalchemy import and_, case, func, select, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import contains_eager
 
@@ -12,7 +12,7 @@ from app.models.bank_connection import BankConnection
 from app.models.credit_card_bill import CreditCardBill
 from app.models.transaction import Transaction
 from app.schemas.account import AccountCreate, AccountUpdate
-from app.services._query_filters import counts_as_pnl
+from app.services._query_filters import counts_as_pnl, posted_only as _posted_only_filter, realized_only
 from app.services.credit_card_service import apply_effective_date, compute_available_credit, get_cycle_dates
 from app.models.category import Category
 
@@ -22,7 +22,7 @@ def get_account_name(account: Account) -> str:
 
 
 def _simplefin_to_internal_balance(provider: str, account_type: str, balance: Decimal) -> Decimal:
-    """Normalize a SimpleFIN balance to Securo's positive-for-debt convention.
+    """Normalize a SimpleFIN balance to Talismã's positive-for-debt convention.
 
     SimpleFIN reports a credit card's balance as negative debt and exposes no
     account type, so the provider stores it raw and labels every account
@@ -64,6 +64,7 @@ async def get_accounts(session: AsyncSession, workspace_id: uuid.UUID, include_c
         .outerjoin(Category, Transaction.category_id == Category.id)
         .where(
             Transaction.is_ignored == False,
+            realized_only(),
             or_(
                 Transaction.category_id.is_(None),
                 Category.is_ignored == False,
@@ -87,6 +88,7 @@ async def get_accounts(session: AsyncSession, workspace_id: uuid.UUID, include_c
         .where(
             Transaction.date <= prev_month_end,
             Transaction.is_ignored == False,
+            realized_only(),
             or_(
                 Transaction.category_id.is_(None),
                 Category.is_ignored == False,
@@ -622,6 +624,7 @@ async def get_account_summary(
     date_from: Optional[_Date] = None, date_to: Optional[_Date] = None,
     bill_id: Optional[uuid.UUID] = None,
     unbilled_only: bool = False,
+    posted_only: bool = False,
 ) -> Optional[dict]:
     account = await get_account(session, account_id, workspace_id)
     if not account:
@@ -640,10 +643,14 @@ async def get_account_summary(
     )
 
     # For bank-connected accounts, use the stored balance from the provider
+    # (bank truth already reflects posted money).
     if account.connection_id:
         current_balance = float(account.balance)
     else:
-        # Current balance = SUM(credit amounts) - SUM(debit amounts)
+        # Current balance = SUM(credit amounts) - SUM(debit amounts),
+        # counting only realized transactions (scheduled/"a pagar" excluded).
+        # With `posted_only`, also excludes `pending` (bank statement view).
+        balance_filter = _posted_only_filter() if posted_only else realized_only()
         balance_result = await session.execute(
             select(
                 func.coalesce(
@@ -658,6 +665,7 @@ async def get_account_summary(
             ).where(
                 Transaction.account_id == account_id,
                 Transaction.is_ignored == False,
+                balance_filter,
                 or_(
                     Transaction.category_id.is_(None),
                     Transaction.category_id.not_in(
@@ -744,12 +752,17 @@ async def get_account_summary(
 
     # Income = SUM of credit transactions in window (excluding opening_balance,
     # paired transfers, and transfer-like categories).
+    # Income = SUM of credit transactions in window (excluding opening_balance,
+    # paired transfers, and transfer-like categories).
+    # With `posted_only`, also excludes `pending` rows so the statement's
+    # income/expense match only what's actually posted.
+    pnl_filter = and_(_posted_only_filter(), counts_as_pnl()) if posted_only else counts_as_pnl()
     income_result = await session.execute(
         _scope(select(func.coalesce(func.sum(effective_amount), 0)).where(
             Transaction.account_id == account_id,
             Transaction.type == "credit",
             Transaction.source != "opening_balance",
-            counts_as_pnl(),
+            pnl_filter,
         ))
     )
     monthly_income = float(income_result.scalar())
@@ -768,7 +781,7 @@ async def get_account_summary(
             _scope(select(func.coalesce(func.sum(signed_for_bill), 0)).where(
                 Transaction.account_id == account_id,
                 Transaction.source != "opening_balance",
-                counts_as_pnl(),
+                pnl_filter,
             ))
         )
     else:
@@ -776,16 +789,35 @@ async def get_account_summary(
             _scope(select(func.coalesce(func.sum(func.abs(effective_amount)), 0)).where(
                 Transaction.account_id == account_id,
                 Transaction.type == "debit",
-                counts_as_pnl(),
+                pnl_filter,
             ))
         )
     monthly_expenses = float(expenses_result.scalar())
+
+    # Total "a pagar" for the account: every scheduled debit (all dates —
+    # overdue and upcoming). These do NOT count toward current_balance yet.
+    scheduled_result = await session.execute(
+        select(func.coalesce(func.sum(func.abs(effective_amount)), 0)).where(
+            Transaction.account_id == account_id,
+            Transaction.type == "debit",
+            Transaction.status == "scheduled",
+            Transaction.is_ignored == False,
+            or_(
+                Transaction.category_id.is_(None),
+                Transaction.category_id.not_in(
+                    select(Category.id).where(Category.is_ignored == True)
+                ),
+            ),
+        )
+    )
+    scheduled_expenses = float(scheduled_result.scalar())
 
     return {
         "account_id": account_id,
         "current_balance": current_balance,
         "monthly_income": monthly_income,
         "monthly_expenses": monthly_expenses,
+        "scheduled_expenses": scheduled_expenses,
     }
 
 
@@ -805,9 +837,12 @@ def _signed_amount_expr(account_currency: str):
 async def _account_balance_at(
     session: AsyncSession, account_id: uuid.UUID, cutoff: _Date,
     account_currency: str = "",
+    posted_only: bool = False,
 ) -> float:
     """Get balance for a single account at a specific date.
-    Excludes ignored transactions from the balance calculation."""
+    Excludes ignored transactions and scheduled ("a pagar") ones from the
+    balance calculation. With `posted_only`, also excludes `pending`."""
+    balance_filter = _posted_only_filter() if posted_only else realized_only()
     result = await session.execute(
         select(func.coalesce(func.sum(_signed_amount_expr(account_currency)), 0))
         .outerjoin(Category, Transaction.category_id == Category.id)
@@ -815,6 +850,7 @@ async def _account_balance_at(
             Transaction.account_id == account_id,
             Transaction.date <= cutoff,
             Transaction.is_ignored == False,
+            balance_filter,
             or_(
                 Transaction.category_id.is_(None),
                 Category.is_ignored == False,
@@ -828,14 +864,20 @@ async def _account_daily_balance_series(
     session: AsyncSession, account_id: uuid.UUID,
     date_from: _Date, date_to: _Date,
     account_currency: str = "",
+    posted_only: bool = False,
 ) -> list[dict]:
     """Build daily balance series for [date_from, date_to] inclusive.
-    Excludes ignored transactions from balance calculations."""
+    Excludes ignored transactions and scheduled ("a pagar") ones.
+    With `posted_only`, also excludes `pending`."""
     # Get balance at end of day before range start
-    start_balance = await _account_balance_at(session, account_id, date_from - timedelta(days=1), account_currency)
+    start_balance = await _account_balance_at(
+        session, account_id, date_from - timedelta(days=1), account_currency,
+        posted_only=posted_only,
+    )
 
     # Get daily deltas within range: group by actual date
     # Exclude ignored transactions from daily deltas
+    balance_filter = _posted_only_filter() if posted_only else realized_only()
     result = await session.execute(
         select(
             Transaction.date,
@@ -847,6 +889,7 @@ async def _account_daily_balance_series(
             Transaction.date >= date_from,
             Transaction.date <= date_to,
             Transaction.is_ignored == False,
+            balance_filter,
             or_(
                 Transaction.category_id.is_(None),
                 Category.is_ignored == False,
@@ -871,6 +914,7 @@ async def _account_daily_balance_series(
 async def get_account_balance_history(
     session: AsyncSession, account_id: uuid.UUID, workspace_id: uuid.UUID,
     date_from: Optional[_Date] = None, date_to: Optional[_Date] = None,
+    posted_only: bool = False,
 ) -> Optional[list[dict]]:
     account = await get_account(session, account_id, workspace_id)
     if not account:
@@ -884,7 +928,10 @@ async def get_account_balance_history(
 
     sign = -1.0 if (account.type == "credit_card" and account.connection_id) else 1.0
 
-    series = await _account_daily_balance_series(session, account_id, date_from, date_to, account.currency)
+    series = await _account_daily_balance_series(
+        session, account_id, date_from, date_to, account.currency,
+        posted_only=posted_only,
+    )
 
     if sign != 1.0:
         for point in series:

@@ -16,6 +16,16 @@ export type ColumnId =
   | 'type'
   | 'status'
 
+// The description column is the table's single flexible column: every other
+// column renders at a fixed px width and Description absorbs the remaining
+// space up to DESCRIPTION_MAX_WIDTH (so it never grows unbounded on wide
+// viewports; the leftover is redistributed to the other columns).
+// DESCRIPTION_MIN_WIDTH guarantees the title always has room for roughly
+// 20+ characters before truncating.
+export const FLEXIBLE_COL_ID: ColumnId = 'description'
+export const DESCRIPTION_MIN_WIDTH = 180
+export const DESCRIPTION_MAX_WIDTH = 320
+
 export type SortDir = 'asc' | 'desc'
 
 export interface ColumnDef {
@@ -32,17 +42,17 @@ export interface ColumnDef {
 // list in registry order; visible columns render in the order the user has
 // chosen (persisted in localStorage), which defaults to registry order.
 export const COLUMN_REGISTRY: ColumnDef[] = [
-  { id: 'date',        labelKey: 'transactions.colDate',        defaultVisible: true,  sortable: true,  defaultWidth: 110, align: 'left' },
-  { id: 'description', labelKey: 'transactions.colDescription', alwaysOn: true, defaultVisible: true, sortable: true, defaultWidth: 320, align: 'left' },
-  { id: 'category',    labelKey: 'transactions.colCategory',    defaultVisible: true,  sortable: true,  defaultWidth: 180, align: 'left' },
-  { id: 'account',     labelKey: 'transactions.colAccount',     defaultVisible: true,  sortable: true,  defaultWidth: 160, align: 'left' },
-  { id: 'payee',       labelKey: 'transactions.colPayee',       defaultVisible: false, sortable: true,  defaultWidth: 160, align: 'left' },
-  { id: 'notes',       labelKey: 'transactions.colNotes',       defaultVisible: false, sortable: false, defaultWidth: 220, align: 'left' },
-  { id: 'tags',        labelKey: 'transactions.colTags',        defaultVisible: false, sortable: false, defaultWidth: 180, align: 'left' },
-  { id: 'attachments', labelKey: 'transactions.colAttachments', defaultVisible: false, sortable: false, defaultWidth: 70,  align: 'right' },
-  { id: 'type',        labelKey: 'transactions.colType',        defaultVisible: false, sortable: true,  defaultWidth: 100, align: 'left' },
-  { id: 'status',      labelKey: 'transactions.colStatus',      defaultVisible: false, sortable: true,  defaultWidth: 100, align: 'left' },
-  { id: 'amount',      labelKey: 'transactions.colAmount',      alwaysOn: true, defaultVisible: true, sortable: true, defaultWidth: 160, align: 'right' },
+  { id: 'date',        labelKey: 'transactions.colDate',        defaultVisible: true,  sortable: true,  defaultWidth: 120, align: 'left' },
+  { id: 'description', labelKey: 'transactions.colDescription', alwaysOn: true, defaultVisible: true, sortable: true, defaultWidth: DESCRIPTION_MIN_WIDTH, align: 'left' },
+  { id: 'category',    labelKey: 'transactions.colCategory',    defaultVisible: true,  sortable: true,  defaultWidth: 150, align: 'left' },
+  { id: 'account',     labelKey: 'transactions.colAccount',     defaultVisible: true,  sortable: true,  defaultWidth: 180, align: 'left' },
+  { id: 'payee',       labelKey: 'transactions.colPayee',       defaultVisible: false, sortable: true,  defaultWidth: 120, align: 'left' },
+  { id: 'notes',       labelKey: 'transactions.colNotes',       defaultVisible: false, sortable: false, defaultWidth: 140, align: 'left' },
+  { id: 'tags',        labelKey: 'transactions.colTags',        defaultVisible: false, sortable: false, defaultWidth: 120, align: 'left' },
+  { id: 'attachments', labelKey: 'transactions.colAttachments', defaultVisible: false, sortable: false, defaultWidth: 50,  align: 'right' },
+  { id: 'type',        labelKey: 'transactions.colType',        defaultVisible: false, sortable: true,  defaultWidth: 70,  align: 'left' },
+  { id: 'status',      labelKey: 'transactions.colStatus',      defaultVisible: true,  sortable: true,  defaultWidth: 85,  align: 'left' },
+  { id: 'amount',      labelKey: 'transactions.colAmount',      alwaysOn: true, defaultVisible: true, sortable: true, defaultWidth: 100, align: 'right' },
 ]
 
 const COL_BY_ID: Record<ColumnId, ColumnDef> = Object.fromEntries(
@@ -53,9 +63,18 @@ export function getColumn(id: ColumnId): ColumnDef {
   return COL_BY_ID[id]
 }
 
-const STORAGE_KEY_ORDER = 'securo.transactions.columns.order'
-const STORAGE_KEY_WIDTHS = 'securo.transactions.columns.widths'
-const STORAGE_KEY_SORT = 'securo.transactions.sort'
+const STORAGE_KEY_ORDER = 'talisma.transactions.columns.order'
+const STORAGE_KEY_WIDTHS = 'talisma.transactions.columns.widths'
+const STORAGE_KEY_SORT = 'talisma.transactions.sort'
+// One-time migration flag: inject the `status` column into an already-saved
+// column order (the feature shipped with status hidden by default). Set once
+// so a later user choice to hide it is respected.
+const STORAGE_KEY_STATUS_MIGRATED = 'talisma.transactions.columns.statusShownV2'
+// One-time migration flag: discard column widths saved before the defaults
+// were rebalanced (wider date/category/account, capped description) to fit
+// the page without zooming out. Set once so a later user resize keeps being
+// respected.
+const STORAGE_KEY_WIDTHS_MIGRATED = 'talisma.transactions.columns.widthsV7'
 
 function loadOrder(): ColumnId[] {
   try {
@@ -68,6 +87,14 @@ function loadOrder(): ColumnId[] {
     for (const c of COLUMN_REGISTRY) {
       if (c.alwaysOn && !known.includes(c.id)) known.push(c.id)
     }
+    // One-time migration: reveal the new `status` column for users with a
+    // saved order that predates it (it lives in the registry, not their list).
+    if (!known.includes('status') && !localStorage.getItem(STORAGE_KEY_STATUS_MIGRATED)) {
+      const registryOrder = COLUMN_REGISTRY.map(c => c.id)
+      const statusIdx = registryOrder.indexOf('status')
+      known.splice(statusIdx, 0, 'status')
+      try { localStorage.setItem(STORAGE_KEY_STATUS_MIGRATED, '1') } catch { /* quota / disabled */ }
+    }
     return known
   } catch {
     return defaultVisibleOrder()
@@ -79,6 +106,13 @@ function defaultVisibleOrder(): ColumnId[] {
 }
 
 function loadWidths(): Partial<Record<ColumnId, number>> {
+  // One-time migration: drop widths saved under the old defaults so the
+  // tightened column widths actually take effect (widthOf falls back to the
+  // registry default only when nothing is saved).
+  if (!localStorage.getItem(STORAGE_KEY_WIDTHS_MIGRATED)) {
+    try { localStorage.setItem(STORAGE_KEY_WIDTHS_MIGRATED, '1') } catch { /* quota / disabled */ }
+    return {}
+  }
   try {
     const raw = localStorage.getItem(STORAGE_KEY_WIDTHS)
     if (!raw) return {}

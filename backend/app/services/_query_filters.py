@@ -49,15 +49,18 @@ def counts_as_pnl():
         movements like investment applications where the counterpart is
         an Asset/Holding, not another Account),
       - transactions flagged `is_ignored=True` (user-marked as not to be reported),
-      - transactions in categories flagged `is_ignored=True` (user-marked as not to be reported).
+      - transactions in categories flagged `is_ignored=True` (user-marked as not to be reported),
+      - `scheduled` transactions ("a pagar") — money that hasn't actually
+        moved yet; they become income/expense only when paid (posted).
 
     Does NOT exclude `source='opening_balance'` — callers that already
     filter those keep doing so; this helper only handles the transfer-like
-    exclusion family so both rules stay visible at each call site.
+    and lifecycle exclusion family so both rules stay visible at each call site.
     """
     return and_(
         Transaction.transfer_pair_id.is_(None),
         Transaction.is_ignored.is_(False),
+        Transaction.status != "scheduled",
         # Settlement *debits* are repayments of debts that were already
         # booked as an expense via the share. Counting them would
         # double-count. Settlement *credits*, however, represent the
@@ -77,6 +80,27 @@ def counts_as_pnl():
             ),
         ),
     )
+
+
+def realized_only():
+    """SQL filter: True when a transaction counts toward an account balance.
+
+    Scheduled ("a pagar") transactions haven't moved money yet, so they are
+    excluded from every balance/current-balance aggregation. `pending`
+    (bank sync) rows keep counting exactly as before.
+    """
+    return Transaction.status != "scheduled"
+
+
+def posted_only():
+    """SQL filter: True only for transactions whose money has actually moved.
+
+    Stricter than `realized_only`: also excludes `pending` (bank sync rows
+    awaiting confirmation). Used for the bank-statement view — the main
+    statement and balance/flow aggregations count only `posted` rows, while
+    `pending` + `scheduled` live in the separate "Agendamentos" section.
+    """
+    return Transaction.status == "posted"
 
 
 def counts_as_user_pnl():

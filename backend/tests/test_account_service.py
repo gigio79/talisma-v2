@@ -763,6 +763,62 @@ async def test_get_account_summary_excludes_transfers(session: AsyncSession, tes
 
 
 @pytest.mark.asyncio
+async def test_get_account_summary_excludes_scheduled(session: AsyncSession, test_user, test_workspace):
+    """Summary excludes scheduled ("a pagar") debits from balance but reports
+    them as scheduled_expenses."""
+    account = await _make_account(session, test_user.id, "Scheduled Exclude")
+    today = date.today()
+
+    await _add_txn(session, test_user.id, account.id, 1000, "credit", today)
+    await _add_txn(session, test_user.id, account.id, 200, "debit", today)
+    scheduled = await _add_txn(session, test_user.id, account.id, 150, "debit", today)
+    scheduled.status = "scheduled"
+    await session.commit()
+
+    summary = await get_account_summary(session, account.id, test_workspace.id)
+    assert summary is not None
+    # Scheduled debit doesn't touch current_balance nor monthly_expenses
+    assert summary["current_balance"] == pytest.approx(800.0)  # 1000 - 200
+    assert summary["monthly_expenses"] == pytest.approx(200.0)
+    assert summary["scheduled_expenses"] == pytest.approx(150.0)
+
+
+@pytest.mark.asyncio
+async def test_get_account_summary_posted_only(session: AsyncSession, test_user, test_workspace):
+    """Summary with posted_only=True counts only posted transactions — pending
+    and scheduled stay out of balance and income/expense (bank-statement view)."""
+    account = await _make_account(session, test_user.id, "Posted Only")
+    today = date.today()
+
+    await _add_txn(session, test_user.id, account.id, 1000, "credit", today)
+    await _add_txn(session, test_user.id, account.id, 200, "debit", today)
+
+    pending = await _add_txn(session, test_user.id, account.id, 300, "credit", today)
+    pending.status = "pending"
+    scheduled = await _add_txn(session, test_user.id, account.id, 150, "debit", today)
+    scheduled.status = "scheduled"
+    await session.commit()
+
+    # Default behavior (posted_only=False): pending still counts, scheduled doesn't.
+    summary_default = await get_account_summary(session, account.id, test_workspace.id)
+    assert summary_default is not None
+    assert summary_default["current_balance"] == pytest.approx(1100.0)  # 1000 - 200 + 300
+    assert summary_default["monthly_income"] == pytest.approx(1300.0)
+    assert summary_default["monthly_expenses"] == pytest.approx(200.0)
+
+    # posted_only=True: only posted rows count.
+    summary_posted = await get_account_summary(
+        session, account.id, test_workspace.id, posted_only=True,
+    )
+    assert summary_posted is not None
+    assert summary_posted["current_balance"] == pytest.approx(800.0)  # 1000 - 200
+    assert summary_posted["monthly_income"] == pytest.approx(1000.0)
+    assert summary_posted["monthly_expenses"] == pytest.approx(200.0)
+    # Scheduled still reported separately regardless of posted_only.
+    assert summary_posted["scheduled_expenses"] == pytest.approx(150.0)
+
+
+@pytest.mark.asyncio
 async def test_get_account_summary_not_found(session: AsyncSession, test_user, test_workspace):
     """Summary for nonexistent account returns None."""
     result = await get_account_summary(session, uuid.uuid4(), test_workspace.id)
@@ -792,6 +848,35 @@ async def test_get_account_balance_history(session: AsyncSession, test_user, tes
     # Each entry has date and balance
     assert "date" in history[0]
     assert "balance" in history[0]
+
+
+@pytest.mark.asyncio
+async def test_get_account_balance_history_posted_only(session: AsyncSession, test_user, test_workspace):
+    """Balance history with posted_only=True excludes pending transactions from
+    the daily series (bank-statement view)."""
+    account = await _make_account(session, test_user.id, "Posted Only History")
+    today = date.today()
+
+    await _add_txn(session, test_user.id, account.id, 1000, "credit", today, source="opening_balance")
+    await _add_txn(session, test_user.id, account.id, 200, "debit", today)
+    pending = await _add_txn(session, test_user.id, account.id, 150, "debit", today)
+    pending.status = "pending"
+    await session.commit()
+
+    history_default = await get_account_balance_history(
+        session, account.id, test_workspace.id, date_from=today, date_to=today,
+    )
+    assert history_default is not None
+    # pending still counts by default: 1000 - 200 - 150 = 650
+    assert history_default[-1]["balance"] == pytest.approx(650.0)
+
+    history_posted = await get_account_balance_history(
+        session, account.id, test_workspace.id, date_from=today, date_to=today,
+        posted_only=True,
+    )
+    assert history_posted is not None
+    # pending excluded: 1000 - 200 = 800
+    assert history_posted[-1]["balance"] == pytest.approx(800.0)
 
 
 @pytest.mark.asyncio

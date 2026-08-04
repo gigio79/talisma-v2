@@ -397,12 +397,12 @@ export const accounts = {
   delete: async (id: string): Promise<void> => {
     await api.delete(`/accounts/${id}`)
   },
-  summary: async (id: string, from?: string, to?: string, billId?: string, unbilledOnly?: boolean): Promise<AccountSummary> => {
-    const { data } = await api.get(`/accounts/${id}/summary`, { params: { from, to, bill_id: billId, unbilled_only: unbilledOnly || undefined } })
+  summary: async (id: string, from?: string, to?: string, billId?: string, unbilledOnly?: boolean, postedOnly?: boolean): Promise<AccountSummary> => {
+    const { data } = await api.get(`/accounts/${id}/summary`, { params: { from, to, bill_id: billId, unbilled_only: unbilledOnly || undefined, posted_only: postedOnly || undefined } })
     return data
   },
-  balanceHistory: async (id: string, from?: string, to?: string): Promise<{ date: string; balance: number; balance_primary?: number }[]> => {
-    const { data } = await api.get(`/accounts/${id}/balance-history`, { params: { from, to } })
+  balanceHistory: async (id: string, from?: string, to?: string, postedOnly?: boolean): Promise<{ date: string; balance: number; balance_primary?: number }[]> => {
+    const { data } = await api.get(`/accounts/${id}/balance-history`, { params: { from, to, posted_only: postedOnly || undefined } })
     return data
   },
   bills: async (id: string, limit = 24): Promise<CreditCardBill[]> => {
@@ -445,6 +445,7 @@ export const transactions = {
     max_amount?: number
     sort_by?: string
     sort_dir?: 'asc' | 'desc'
+    statuses?: string[]
   }): Promise<PaginatedTransactions> => {
     const { data } = await api.get('/transactions', {
       params,
@@ -795,7 +796,7 @@ export const groups = {
 export type { TransactionSplitsInput }
 
 // User lookup: exact-match resolution for linking group members to
-// existing Securo users. Returns null on miss (404).
+// existing Talismã users. Returns null on miss (404).
 export interface UserLookupResult {
   id: string
   email: string
@@ -846,7 +847,7 @@ export const rules = {
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `securo-categorization-rules-${new Date().toISOString().slice(0, 10)}.json`
+    a.download = `talisma-categorization-rules-${new Date().toISOString().slice(0, 10)}.json`
     document.body.appendChild(a)
     a.click()
     document.body.removeChild(a)
@@ -1188,7 +1189,7 @@ export const backup = {
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `securo-backup-${new Date().toISOString().slice(0, 10)}.zip`
+    a.download = `talisma-backup-${new Date().toISOString().slice(0, 10)}.zip`
     document.body.appendChild(a)
     a.click()
     document.body.removeChild(a)

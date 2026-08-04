@@ -59,7 +59,7 @@
     "archiveConfirmDescription": "The workspace \"{{name}}\" will be removed from your list. Data is preserved and an admin can restore it later."
   },
   "app": {
-    "name": "Securo",
+    "name": "Talismã",
     "versionAriaLabel": "Running version {{version}}",
     "versionLabel": "Version {{version}}",
     "updateAvailable": "Update Available",
@@ -204,9 +204,9 @@
     "passkeysDescription": "Use security keys or device passkeys to sign in without entering your password. Enrolled passkeys also protect password sign-in as a second factor; passkey-only sign-in skips the authenticator-code step because the key already verifies possession.",
     "passkeyLoadError": "Could not load passkeys",
     "passkeyUnsupported": "This browser does not support passkeys.",
-    "passkeyInsecureContext": "Passkeys need a secure connection. Open Securo over HTTPS, or on http://localhost.",
-    "passkeyIpAddress": "Passkeys do not work on an IP address. Open Securo on a domain name over HTTPS, or on http://localhost.",
-    "passkeyDomainError": "Your browser rejected this domain for passkeys. Open Securo on the domain it is configured for, over HTTPS.",
+    "passkeyInsecureContext": "Passkeys need a secure connection. Open Talismã over HTTPS, or on http://localhost.",
+    "passkeyIpAddress": "Passkeys do not work on an IP address. Open Talismã on a domain name over HTTPS, or on http://localhost.",
+    "passkeyDomainError": "Your browser rejected this domain for passkeys. Open Talismã on the domain it is configured for, over HTTPS.",
     "passkeyDomainMismatch": "This address is outside the passkey domain configured on the server (WEBAUTHN_RP_ID).",
     "passkeyDuplicate": "This device already has a passkey for your account.",
     "passkeyWaiting": "Waiting for your device...",
@@ -356,6 +356,10 @@
     "typeIncome": "Income",
     "statusPending": "Pending",
     "statusPosted": "Posted",
+    "statusScheduled": "Scheduled",
+    "markPaid": "Mark as paid",
+    "paid": "Marked as paid",
+    "undo": "Undo",
     "statusCleared": "Cleared",
     "sortAsc": "Sort ascending",
     "sortDesc": "Sort descending",
@@ -570,6 +574,13 @@
     "backToAccounts": "Back to accounts",
     "runningBalance": "Balance",
     "noTransactions": "No transactions for this account",
+    "scheduledSection": "Scheduled",
+    "scheduledHint": "Pending and scheduled transactions that haven't hit the balance yet.",
+    "scheduledTotal": "Total to pay",
+    "scheduledStatus": "Status",
+    "noScheduled": "Nothing scheduled right now.",
+    "scheduledPay": "Pay",
+    "toPay": "To pay",
     "syncFailed": "Sync failed",
     "reconnect": "Reconnect",
     "connectionError": "Connection error — reconnect to fix",
@@ -613,7 +624,7 @@
       "openBridge": "Generate token at SimpleFIN Bridge",
       "tokenLabel": "Setup token",
       "tokenPlaceholder": "Paste the token you received…",
-      "tokenHelp": "The setup token is single-use. Securo claims a private access URL from it and stores it encrypted.",
+      "tokenHelp": "The setup token is single-use. Talismã claims a private access URL from it and stores it encrypted.",
       "connect": "Connect",
       "connecting": "Connecting…",
       "simplefin": {
@@ -652,7 +663,7 @@
     "syncAssets": "Import investment assets",
     "syncAssetsHint": "When disabled, this connection syncs accounts and transactions but leaves provider investment holdings untouched.",
     "initialSyncSettings": "Sync options",
-    "initialSyncSettingsDesc": "Choose what Securo should import before opening the connector.",
+    "initialSyncSettingsDesc": "Choose what Talismã should import before opening the connector.",
     "continueToConnector": "Continue to connector"
   },
   "settings": {
@@ -905,9 +916,9 @@
     "outflowColumn": "Outflow column",
     "selectColumn": "Select column...",
     "columnMapping": "Column mapping",
-    "columnMappingHint": "Map your CSV columns to Securo fields. Leave on auto-detect to keep the detected column.",
+    "columnMappingHint": "Map your CSV columns to Talismã fields. Leave on auto-detect to keep the detected column.",
     "columnAutoDetect": "Auto-detect",
-    "mappingNeeded": "We couldn't recognize your CSV columns automatically. Map them to Securo fields below to continue.",
+    "mappingNeeded": "We couldn't recognize your CSV columns automatically. Map them to Talismã fields below to continue.",
     "mapDate": "Date column",
     "mapDescription": "Description column",
     "mapAmount": "Amount column",
@@ -1265,11 +1276,11 @@
     "you": "you",
     "memberName": "Name",
     "memberEmail": "Email",
-    "memberEmailHint": "Optional — useful if you invite them as a Securo user later.",
-    "linkedUser": "Linked Securo user",
+    "memberEmailHint": "Optional — useful if you invite them as a Talismã user later.",
+    "linkedUser": "Linked Talismã user",
     "linkedUserNone": "— Not linked (non-user) —",
-    "linkedUserHint": "Pick an existing Securo user to link the member, or leave unlinked to add a non-user (e.g. someone who doesn't have an account yet).",
-    "willLinkToUser": "Will link to existing Securo user {{email}}",
+    "linkedUserHint": "Pick an existing Talismã user to link the member, or leave unlinked to add a non-user (e.g. someone who doesn't have an account yet).",
+    "willLinkToUser": "Will link to existing Talismã user {{email}}",
     "sharedWithYou": "Shared with you",
     "sharedRowBadge": "Shared · {{group}}",
     "sharedRowBadgeAuthor": "{{author}} · {{group}}",
@@ -1350,7 +1361,7 @@
     "show": "Show values"
   },
   "setup": {
-    "title": "Welcome to Securo",
+    "title": "Welcome to Talismã",
     "description": "Create your admin account to get started.",
     "confirmPassword": "Confirm password",
     "createAdmin": "Create Admin Account",
@@ -1378,7 +1389,7 @@
     "title": "Server update",
     "runningLabel": "running",
     "newVersionAvailable": "New version available:",
-    "description": "A new version of Securo is available. Consider updating if you:",
+    "description": "A new version of Talismã is available. Consider updating if you:",
     "reasonFeatures": "Want to access the latest features and improvements",
     "reasonBugs": "Are experiencing issues that may be resolved in the new version",
     "releaseNotesHintBefore": "We recommend reviewing the",
@@ -1478,7 +1489,7 @@
   },
   "agents": {
     "title": "Agents",
-    "subtitle": "Build conversational assistants on top of your Securo data. Each agent can have its own knowledge base, tools, and provider.",
+    "subtitle": "Build conversational assistants on top of your Talismã data. Each agent can have its own knowledge base, tools, and provider.",
     "newAgent": "New agent",
     "newConversation": "New conversation",
     "conversationsCount": "Conversations",
@@ -1645,14 +1656,14 @@
     },
     "mcpExternal": {
       "title": "External MCP access",
-      "subtitle": "Plug an external agent (Claude Desktop, ChatGPT, n8n, a custom client) into Securo's built-in MCP server. The token below is scoped to your user and expires in {{days}} days.",
+      "subtitle": "Plug an external agent (Claude Desktop, ChatGPT, n8n, a custom client) into Talismã's built-in MCP server. The token below is scoped to your user and expires in {{days}} days.",
       "copy": "Copy",
       "copied": "Copied",
       "copyFailed": "Copy failed",
       "mint": "Generate token",
       "minting": "Generating…",
       "mintFailed": "Could not mint token",
-      "warning": "Copy now — Securo does not store the token, so we can't show it again. Revoke by rotating AGENTS_MCP_JWT_SECRET.",
+      "warning": "Copy now — Talismã does not store the token, so we can't show it again. Revoke by rotating AGENTS_MCP_JWT_SECRET.",
       "regenerate": "Generate another",
       "snippets": {
         "token": "Token",
@@ -1703,7 +1714,7 @@
       "optional": "optional",
       "empty": {
         "title": "No connections yet",
-        "subtitle": "Add a connection to point Securo at your local Ollama, OpenAI, Anthropic, or any OpenAI-compatible endpoint."
+        "subtitle": "Add a connection to point Talismã at your local Ollama, OpenAI, Anthropic, or any OpenAI-compatible endpoint."
       }
     }
   }

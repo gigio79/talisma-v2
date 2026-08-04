@@ -18,6 +18,7 @@ from app.services._query_filters import (
     counts_as_pnl,
     counts_as_user_pnl,
     owner_split_offset_by_category,
+    realized_only,
     reporting_date_col,
 )
 from app.services.admin_service import get_credit_card_accounting_mode
@@ -734,6 +735,7 @@ async def get_income_expenses_report(
             Transaction.type == "debit",
             Transaction.transfer_pair_id.is_(None),
             Transaction.is_ignored.is_(False),
+            realized_only(),
             Category.treat_as_transfer.is_(True),
             Category.is_ignored.is_(False),
             *acct_filter,
