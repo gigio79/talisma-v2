@@ -110,7 +110,7 @@ async def setup_database():
     # Clean up test db file
     import os
     try:
-        os.remove("/tmp/securo_test.db")
+        os.remove("/tmp/talisma_test.db")
     except FileNotFoundError:
         pass
 

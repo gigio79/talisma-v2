@@ -194,7 +194,7 @@ async function getLatestOfficialReleaseTagFromApi() {
     const response = await fetch(officialLatestReleaseApi, {
       headers: {
         Accept: 'application/vnd.github+json',
-        'User-Agent': 'securo-frontend-build',
+        'User-Agent': 'talisma-frontend-build',
       },
       signal: AbortSignal.timeout(3000),
     })

@@ -67,7 +67,7 @@ class RuleExportItem(BaseModel):
 
 
 class RuleExportPayload(BaseModel):
-    format: str = "securo-categorization-rules"
+    format: str = "talisma-categorization-rules"
     version: int = 1
     rules: list[RuleExportItem]
 

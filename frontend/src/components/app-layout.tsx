@@ -76,7 +76,7 @@ type NavItem =
   | { type: 'separator'; labelKey: string }
 
 const navItems: NavItem[] = [
-  // The dashboard ("Painel") is now reachable by clicking the Securo
+  // The dashboard ("Painel") is now reachable by clicking the Talismã
   // logo + name in the sidebar header — no dedicated menu item to keep
   // the sidebar focused on the main destinations. Transactions sits
   // inside the ACCOUNTS section since it's account-scoped data.

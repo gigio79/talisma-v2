@@ -75,7 +75,7 @@ from mcp_server.tools._helpers import num, parse_date, parse_uuid, parse_uuid_li
                     "transaction_date = purchase date (default, intuitive 'latest'); "
                     "date = cycle/accrual-aware (matches dashboard ordering, can put "
                     "future-billed credit-card purchases on top); "
-                    "created_at = order rows were inserted into Securo (useful for "
+                    "created_at = order rows were inserted into Talismã (useful for "
                     "freshly-synced data)."
                 ),
             },

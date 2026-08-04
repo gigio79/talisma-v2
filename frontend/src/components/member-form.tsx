@@ -26,14 +26,14 @@ export function MemberForm({
   const { t } = useTranslation()
   const { user } = useAuth()
 
-  // Directory of all Securo users on the instance
+  // Directory of all Talismã users on the instance
   const { data: userDirectory } = useQuery({
     queryKey: ['users', 'directory'],
     queryFn: () => usersApi.directory(),
     staleTime: 60_000,
   })
 
-  // Resolve a typed email to an existing Securo user
+  // Resolve a typed email to an existing Talismã user
   const trimmedEmail = email.trim()
   const { data: lookupResult } = useQuery({
     queryKey: ['users', 'lookup', trimmedEmail.toLowerCase()],

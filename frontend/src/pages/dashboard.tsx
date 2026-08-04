@@ -424,7 +424,7 @@ export default function DashboardPage() {
 
   const [txPerPage, setTxPerPage] = useState<number>(() => {
     try {
-      const stored = localStorage.getItem('securo.dashboard.pageSize')
+      const stored = localStorage.getItem('talisma.dashboard.pageSize')
       return stored ? Number(stored) : 10
     } catch {
       return 10
@@ -1195,7 +1195,7 @@ export default function DashboardPage() {
                         setTxPerPage(nextLimit)
                         setTxPage(1)
                         try {
-                          localStorage.setItem('securo.dashboard.pageSize', String(nextLimit))
+                          localStorage.setItem('talisma.dashboard.pageSize', String(nextLimit))
                         } catch {
                           // ignored
                         }

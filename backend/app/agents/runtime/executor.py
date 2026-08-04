@@ -148,10 +148,10 @@ _RUNTIME_GUARDRAIL = (
     "\n"
     "5. Charts: when a visualization would clearly help (trends over "
     "time, category breakdowns, comparisons), render one inline by "
-    "emitting a fenced code block tagged `securo-chart`. The body is "
+    "emitting a fenced code block tagged `talisma-chart`. The body is "
     "JSON. Multi-series example:\n"
     "\n"
-    "```securo-chart\n"
+    "```talisma-chart\n"
     "{\n"
     '  "type": "line",            // line | bar | area | pie\n'
     '  "title": "Income vs expenses (last 6 months)",\n'
@@ -264,7 +264,7 @@ def _build_agent_identity_primer(agent: Agent) -> str:
     """Baseline persona injected BEFORE the user's system_prompt.
 
     Tells the model two things it had no way to know before:
-      1. It's running inside Securo — an open-source, self-hosted
+      1. It's running inside Talismã — an open-source, self-hosted
          personal-finance app — and what kind of help that implies.
       2. Its own name and stated role, taken from the agent row itself
          (the user picked them in the UI).
@@ -276,7 +276,7 @@ def _build_agent_identity_primer(agent: Agent) -> str:
     description = (agent.description or "").strip()
     lines = [
         "## Who you are",
-        f"You are **{name}**, an AI assistant running inside **Securo** — an "
+        f"You are **{name}**, an AI assistant running inside **Talismã** — an "
         "open-source, self-hosted personal-finance app the user owns and "
         "runs on their own infrastructure. The user is the owner of the "
         "data you operate on; everything you read/write belongs to them.",
@@ -338,7 +338,7 @@ class AgentExecutor:
 
         # 2. Build the message list. Order, top to bottom:
         #      1. Runtime guardrail (app-level invariants — always)
-        #      2. Agent identity primer (who you are + Securo framing)
+        #      2. Agent identity primer (who you are + Talismã framing)
         #      3. User-defined system_prompt (extends or overrides #2)
         #      4. Auto-context primer (user data: name, currency, accounts)
         #      5. Page-context primer (where the user is right now)
@@ -351,7 +351,7 @@ class AgentExecutor:
         # in the propose-vs-action framing and the no-silent-substitution
         # rule. Agents can build on top of these but can't undo them.
         messages.append(ChatMessage(role="system", content=_RUNTIME_GUARDRAIL))
-        # Agent identity — name + description + Securo framing. Ensures
+        # Agent identity — name + description + Talismã framing. Ensures
         # the model knows what product it lives in and what role it was
         # configured for, even when the user leaves system_prompt blank.
         messages.append(ChatMessage(role="system", content=_build_agent_identity_primer(agent)))

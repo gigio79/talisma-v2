@@ -1,7 +1,7 @@
 <p align="center">
-  <img src="docs/logo.svg" width="200" alt="Securo logo" />
+  <img src="docs/logo.svg" width="200" alt="Talismã logo" />
 </p>
-<h1 align="center">Securo</h1>
+<h1 align="center">Talismã</h1>
 <p align="center">
   <a href="https://github.com/securo-finance/securo/actions/workflows/ci.yml"><img src="https://github.com/securo-finance/securo/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
   <img src="https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/tassionoronha/ae627b744aaa2ba89d850ea541c311be/raw/coverage.json" alt="Coverage" />
@@ -9,13 +9,13 @@
   <a href="https://www.gnu.org/licenses/agpl-3.0"><img src="https://img.shields.io/badge/License-AGPL--3.0-blue.svg" alt="License: AGPL-3.0" /></a>
   <a href="https://discord.gg/rUqTKtQ9S4"><img src="https://img.shields.io/badge/Discord-Join%20the%20community-5865F2?logo=discord&logoColor=white" alt="Join our Discord" /></a>
   <br />
-  <a href="https://usesecuro.com/">Website</a> · <a href="https://demo.usesecuro.com/">Try our Demo</a> · <a href="https://docs.usesecuro.com/">Read the Docs</a> · <a href="https://discord.gg/rUqTKtQ9S4">Discord</a>
+  <a href="https://usetalisma.com/">Website</a> · <a href="https://demo.usetalisma.com/">Try our Demo</a> · <a href="https://docs.usetalisma.com/">Read the Docs</a> · <a href="https://discord.gg/rUqTKtQ9S4">Discord</a>
 </p>
 
 <h3 align="center">Finance apps want your data. This one doesn't.</h3>
 
 <p align="center">
-We believe personal finance should actually be <em>personal</em>. No corporation should sit between you and your financial data. Securo is an open-source finance manager that runs on your own infrastructure, giving you full visibility into your accounts, spending, and habits, without surrendering a single byte to third parties. Take back control.
+We believe personal finance should actually be <em>personal</em>. No corporation should sit between you and your financial data. Talismã is an open-source finance manager that runs on your own infrastructure, giving you full visibility into your accounts, spending, and habits, without surrendering a single byte to third parties. Take back control.
 </p>
 
 ## Quick Start
@@ -23,7 +23,7 @@ We believe personal finance should actually be <em>personal</em>. No corporation
 **Linux & macOS** (uses Docker or Podman; installs Docker if neither is present):
 
 ```bash
-curl -fsSL https://usesecuro.com/install.sh | bash
+curl -fsSL https://usetalisma.com/install.sh | bash
 ```
 
 **Windows:** Install [Docker Desktop](https://www.docker.com/products/docker-desktop/), then:
@@ -36,7 +36,7 @@ docker compose up --build
 Open [http://localhost:3000](http://localhost:3000) and create an account. That's it.
 
 <p align="center">
-  <img src="docs/screenshot.png" width="800" alt="Securo dashboard" />
+  <img src="docs/screenshot.png" width="800" alt="Talismã dashboard" />
 </p>
 
 ## Features
@@ -81,7 +81,7 @@ ENABLE_BANKING_OAUTH_REDIRECT_URI=https://your-host/oauth/callback
 
 The redirect URI must match exactly one of the Allowed Redirect URLs in your EB application. Production EB requires HTTPS — for local development, expose your frontend via a tunnel (ngrok, cloudflared) or use the EB sandbox.
 
-> **Free tier — restricted mode.** Enable Banking's free plan requires you to pre-link the accounts you want to import inside the EB portal *before* connecting from Securo. If you skip that step, the connection returns no accounts and Securo will surface a banner with a link to the portal.
+> **Free tier — restricted mode.** Enable Banking's free plan requires you to pre-link the accounts you want to import inside the EB portal *before* connecting from Talismã. If you skip that step, the connection returns no accounts and Talismã will surface a banner with a link to the portal.
 
 ### SimpleFIN — US and international banks
 
@@ -92,14 +92,14 @@ SIMPLEFIN_ENABLED=true
 SIMPLEFIN_API_URL=https://beta-bridge.simplefin.org   # sandbox; use bridge.simplefin.org for real banks
 ```
 
-Then in Securo: **Accounts → Connect Bank → SimpleFIN**, and paste the token. The [developer page](https://beta-bridge.simplefin.org/info/developers) gives out free demo tokens if you want to try it without a real bank.
+Then in Talismã: **Accounts → Connect Bank → SimpleFIN**, and paste the token. The [developer page](https://beta-bridge.simplefin.org/info/developers) gives out free demo tokens if you want to try it without a real bank.
 
 ## OIDC Login (Optional)
 
-Securo can delegate login to any standard OIDC provider, including Authentik and Pocket ID. Create a confidential/web application in your provider and register this redirect URI:
+Talismã can delegate login to any standard OIDC provider, including Authentik and Pocket ID. Create a confidential/web application in your provider and register this redirect URI:
 
 ```
-https://your-securo-host/api/auth/oidc/callback
+https://your-talisma-host/api/auth/oidc/callback
 ```
 
 Then add the provider settings to `.env` and restart:
@@ -108,43 +108,43 @@ Then add the provider settings to `.env` and restart:
 OIDC_ENABLED=true
 OIDC_PROVIDER_NAME=Pocket ID
 OIDC_DISCOVERY_URL=https://id.example.com/.well-known/openid-configuration
-OIDC_CLIENT_ID=securo
+OIDC_CLIENT_ID=talisma
 OIDC_CLIENT_SECRET=your-client-secret
 # Optional; defaults to ${FRONTEND_URL}/api/auth/oidc/callback
-OIDC_REDIRECT_URI=https://your-securo-host/api/auth/oidc/callback
+OIDC_REDIRECT_URI=https://your-talisma-host/api/auth/oidc/callback
 ```
 
-New OIDC users are auto-provisioned by default (`OIDC_AUTO_REGISTER=true`) using verified email addresses. Set `OIDC_AUTO_REGISTER=false` to allow only existing Securo users whose email matches the provider claim.
+New OIDC users are auto-provisioned by default (`OIDC_AUTO_REGISTER=true`) using verified email addresses. Set `OIDC_AUTO_REGISTER=false` to allow only existing Talismã users whose email matches the provider claim.
 
 ### Optional OIDC role sync
 
-Securo can also synchronize provider roles/groups into its built-in permissions when `OIDC_SYNC_ROLES=true`. The default claim is `groups`, which works well with Authentik group mappings and Pocket ID role/group assignments.
+Talismã can also synchronize provider roles/groups into its built-in permissions when `OIDC_SYNC_ROLES=true`. The default claim is `groups`, which works well with Authentik group mappings and Pocket ID role/group assignments.
 
 ```
 OIDC_SYNC_ROLES=true
 OIDC_ROLES_CLAIM=groups
-OIDC_ADMIN_ROLES=securo-admins
-OIDC_WORKSPACE_ROLE_MAP={"securo-owners":"owner","securo-editors":"editor","securo-viewers":"viewer"}
+OIDC_ADMIN_ROLES=talisma-admins
+OIDC_WORKSPACE_ROLE_MAP={"talisma-owners":"owner","talisma-editors":"editor","talisma-viewers":"viewer"}
 ```
 
-`OIDC_ADMIN_ROLES` grants or revokes Securo admin (`is_superuser`) on each OIDC login. `OIDC_WORKSPACE_ROLE_MAP` maps provider roles/groups to the user's Personal workspace role (`owner`, `editor`, or `viewer`); if multiple mapped roles are present, Securo applies the highest permission. Leave `OIDC_SYNC_ROLES=false` to keep all Securo roles managed locally.
+`OIDC_ADMIN_ROLES` grants or revokes Talismã admin (`is_superuser`) on each OIDC login. `OIDC_WORKSPACE_ROLE_MAP` maps provider roles/groups to the user's Personal workspace role (`owner`, `editor`, or `viewer`); if multiple mapped roles are present, Talismã applies the highest permission. Leave `OIDC_SYNC_ROLES=false` to keep all Talismã roles managed locally.
 
 ## Passkeys (Optional)
 
-Sign in with Touch ID, Face ID, Windows Hello, or a security key. Passkeys are on by default and need no configuration: they follow whatever address you open Securo on.
+Sign in with Touch ID, Face ID, Windows Hello, or a security key. Passkeys are on by default and need no configuration: they follow whatever address you open Talismã on.
 
 Two rules come from the WebAuthn standard itself, and no setting can work around them:
 
 - **An IP address is never valid.** `http://192.168.1.10:3000` cannot register passkeys.
 - **Plain HTTP is never valid, except on `localhost`.**
 
-So use passkeys on `http://localhost:3000`, or put Securo on a domain behind an HTTPS reverse proxy. When serving from a domain, point `FRONTEND_URL` at it (this also covers CORS and OAuth callbacks):
+So use passkeys on `http://localhost:3000`, or put Talismã on a domain behind an HTTPS reverse proxy. When serving from a domain, point `FRONTEND_URL` at it (this also covers CORS and OAuth callbacks):
 
 ```
-FRONTEND_URL=https://securo.example.com
+FRONTEND_URL=https://talisma.example.com
 ```
 
-To pin passkeys to one domain, set `WEBAUTHN_RP_ID` (use the parent domain if you reach Securo on several subdomains). Otherwise Securo follows the browser, and requests from an unusable address get an explanation in the UI instead of a silent failure.
+To pin passkeys to one domain, set `WEBAUTHN_RP_ID` (use the parent domain if you reach Talismã on several subdomains). Otherwise Talismã follows the browser, and requests from an unusable address get an explanation in the UI instead of a silent failure.
 
 ## Exchange Rates (Optional)
 
@@ -158,7 +158,7 @@ Rates are fetched on-demand when foreign-currency transactions are created. With
 
 ## AI Agents (Optional)
 
-Self-hosted AI assistants over your Securo data — multi-provider (OpenAI, Anthropic, Ollama, OpenAI-compatible), tool-use via MCP, per-agent RAG knowledge base, ⌘J global chat panel.
+Self-hosted AI assistants over your Talismã data — multi-provider (OpenAI, Anthropic, Ollama, OpenAI-compatible), tool-use via MCP, per-agent RAG knowledge base, ⌘J global chat panel.
 
 Add to `.env`:
 

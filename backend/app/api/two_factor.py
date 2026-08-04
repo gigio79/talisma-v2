@@ -44,7 +44,7 @@ async def setup_2fa(
     await session.commit()
 
     totp = pyotp.TOTP(secret)
-    otpauth_uri = totp.provisioning_uri(name=user.email, issuer_name="Securo")
+    otpauth_uri = totp.provisioning_uri(name=user.email, issuer_name="Talismã")
 
     return TwoFactorSetupResponse(secret=secret, otpauth_uri=otpauth_uri)
 

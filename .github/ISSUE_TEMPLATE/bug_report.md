@@ -1,6 +1,6 @@
 ---
 name: Bug Report
-about: Report a bug to help us improve Securo
+about: Report a bug to help us improve Talismã
 title: "[Bug] "
 labels: bug
 assignees: ""

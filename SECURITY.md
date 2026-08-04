@@ -2,11 +2,11 @@
 
 ## Reporting a Vulnerability
 
-If you discover a security vulnerability in Securo, please report it responsibly.
+If you discover a security vulnerability in Talismã, please report it responsibly.
 
 **Do NOT open a public GitHub issue for security vulnerabilities.**
 
-Instead, please email: **contact@usesecuro.com** (or open a private security advisory on GitHub)
+Instead, please email: **contact@usetalisma.com** (or open a private security advisory on GitHub)
 
 ### What to include
 

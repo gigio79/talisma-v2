@@ -16,7 +16,7 @@ type CollectionFilterValue = {
 }
 
 const CollectionFilterContext = createContext<CollectionFilterValue | null>(null)
-const STORAGE_PREFIX = 'securo.activeCollection.'
+const STORAGE_PREFIX = 'talisma.activeCollection.'
 
 export function CollectionFilterProvider({ children }: { children: ReactNode }) {
   const { current } = useWorkspace()

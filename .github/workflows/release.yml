@@ -33,7 +33,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.IMAGE_PREFIX }}/securo-backend
+          images: ${{ env.IMAGE_PREFIX }}/talisma-backend
           tags: |
             type=semver,pattern={{version}}
             type=raw,value=latest
@@ -73,7 +73,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.IMAGE_PREFIX }}/securo-frontend
+          images: ${{ env.IMAGE_PREFIX }}/talisma-frontend
           tags: |
             type=semver,pattern={{version}}
             type=raw,value=latest

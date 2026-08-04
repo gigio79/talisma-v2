@@ -51,7 +51,7 @@ TRANSACTION_PAGE_LIMIT = 50  # safety cap
 
 
 def _map_cash_account_type(eb_type: Optional[str]) -> str:
-    """Map EB cash_account_type (ISO 20022) to Securo internal type."""
+    """Map EB cash_account_type (ISO 20022) to Talismã internal type."""
     if not eb_type:
         return "checking"
     mapping = {
@@ -249,7 +249,7 @@ class EnableBankingProvider(BankProvider):
                 "Authorization": f"Bearer {self._jwt_token()}",
                 "Accept": "application/json",
                 "Content-Type": "application/json",
-                "User-Agent": "Securo/0.1 (+https://usesecuro.com)",
+                "User-Agent": "Talismã/0.1 (+https://usetalisma.com)",
             },
             timeout=30.0,
         )

@@ -9,8 +9,8 @@ from jose import jwt
 from app.agents.config import get_agent_settings
 
 
-JWT_ISSUER = "securo-backend"
-JWT_AUDIENCE = "securo-mcp"
+JWT_ISSUER = "talisma-backend"
+JWT_AUDIENCE = "talisma-mcp"
 JWT_ALGO = "HS256"
 
 

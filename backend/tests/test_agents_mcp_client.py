@@ -92,7 +92,7 @@ def test_parse_servers_includes_builtin_only_by_default(monkeypatch):
     s = get_agent_settings()
     monkeypatch.setattr(s, "extra_mcp_servers", "")
     out = _parse_servers()
-    assert [sp.name for sp in out] == ["securo"]
+    assert [sp.name for sp in out] == ["talisma"]
 
 
 def test_parse_servers_handles_extra_with_and_without_alias(monkeypatch):
@@ -103,8 +103,8 @@ def test_parse_servers_handles_extra_with_and_without_alias(monkeypatch):
     out = _parse_servers()
     names = [sp.name for sp in out]
     urls = {sp.name: sp.url for sp in out}
-    # securo + 3 extras (empty entry is skipped)
-    assert names == ["securo", "alpha", "http://b:9001/mcp", "gamma"]
+    # talisma + 3 extras (empty entry is skipped)
+    assert names == ["talisma", "alpha", "http://b:9001/mcp", "gamma"]
     assert urls["alpha"] == "http://a:9000/mcp"
     assert urls["gamma"] == "http://c:9002/mcp"
 
@@ -112,7 +112,7 @@ def test_parse_servers_handles_extra_with_and_without_alias(monkeypatch):
 # --------------------------------------------------------------------- MCPClient.list_tools
 
 @pytest.mark.asyncio
-async def test_list_tools_parses_securo_extras_and_defaults_schema():
+async def test_list_tools_parses_talisma_extras_and_defaults_schema():
     _FakeAsyncClient.queue.append(_FakeResponse(json_body={
         "jsonrpc": "2.0",
         "id": 1,
@@ -127,13 +127,13 @@ async def test_list_tools_parses_securo_extras_and_defaults_schema():
                     "name": "create_payee",
                     "description": "Create a payee",
                     # no inputSchema — should default
-                    "_securo": {"is_proposal": True},
+                    "_talisma": {"is_proposal": True},
                 },
             ]
         },
     }))
 
-    client = MCPClient(name="securo", url="http://mcp.test/mcp")
+    client = MCPClient(name="talisma", url="http://mcp.test/mcp")
     handles = await client.list_tools(token="fake")
 
     assert len(handles) == 2
@@ -151,7 +151,7 @@ async def test_list_tools_handles_missing_tools_array():
     _FakeAsyncClient.queue.append(_FakeResponse(json_body={
         "jsonrpc": "2.0", "id": 1, "result": None,
     }))
-    client = MCPClient(name="securo", url="http://mcp.test/mcp")
+    client = MCPClient(name="talisma", url="http://mcp.test/mcp")
     assert await client.list_tools(token="fake") == []
 
 
@@ -164,7 +164,7 @@ async def test_post_raises_runtime_error_when_rpc_error_present():
         "id": 1,
         "error": {"code": -32601, "message": "method not found"},
     }))
-    client = MCPClient(name="securo", url="http://mcp.test/mcp")
+    client = MCPClient(name="talisma", url="http://mcp.test/mcp")
     with pytest.raises(RuntimeError, match="method not found"):
         await client.list_tools(token="fake")
 
@@ -182,7 +182,7 @@ async def test_call_tool_unpacks_structured_content_and_text():
             "content": [{"type": "text", "text": "ok"}],
         },
     }))
-    client = MCPClient(name="securo", url="http://mcp.test/mcp")
+    client = MCPClient(name="talisma", url="http://mcp.test/mcp")
     out = await client.call_tool(name="list_accounts", arguments={}, token="fake")
     assert out == {"ok": True, "data": {"items": [1, 2, 3]}, "text": "ok"}
 
@@ -198,7 +198,7 @@ async def test_call_tool_marks_error_when_is_error_true():
             "content": [{"type": "text", "text": "bad input"}],
         },
     }))
-    client = MCPClient(name="securo", url="http://mcp.test/mcp")
+    client = MCPClient(name="talisma", url="http://mcp.test/mcp")
     out = await client.call_tool(name="x", arguments={}, token="fake")
     assert out["ok"] is False
     assert out["data"] == {"error": "bad input"}
@@ -213,7 +213,7 @@ async def test_call_tool_falls_back_when_no_structured_content():
         "id": 1,
         "result": {"content": [{"type": "text", "text": "raw"}], "isError": False},
     }))
-    client = MCPClient(name="securo", url="http://mcp.test/mcp")
+    client = MCPClient(name="talisma", url="http://mcp.test/mcp")
     out = await client.call_tool(name="x", arguments={}, token="fake")
     assert out["ok"] is True
     assert out["text"] == ""
@@ -225,17 +225,17 @@ async def test_call_tool_falls_back_when_no_structured_content():
 
 def test_to_provider_tools_namespaces_and_filters():
     handles = [
-        ToolHandle(server="securo", name="list_accounts", description="d1", parameters={"type": "object"}),
-        ToolHandle(server="securo", name="create_payee", description="d2", parameters={}),
+        ToolHandle(server="talisma", name="list_accounts", description="d1", parameters={"type": "object"}),
+        ToolHandle(server="talisma", name="create_payee", description="d2", parameters={}),
         ToolHandle(server="extra", name="list_accounts", description="d3", parameters={}),
     ]
     # No filter → all three.
     all_tools = MCPRegistry.to_provider_tools(handles, allowed=None)
-    assert {t.name for t in all_tools} == {"securo__list_accounts", "securo__create_payee", "extra__list_accounts"}
+    assert {t.name for t in all_tools} == {"talisma__list_accounts", "talisma__create_payee", "extra__list_accounts"}
 
     # Filter by (server, name) pair.
-    filtered = MCPRegistry.to_provider_tools(handles, allowed={("securo", "list_accounts")})
-    assert [t.name for t in filtered] == ["securo__list_accounts"]
+    filtered = MCPRegistry.to_provider_tools(handles, allowed={("talisma", "list_accounts")})
+    assert [t.name for t in filtered] == ["talisma__list_accounts"]
     # Defaults a missing parameters schema to an empty object schema.
     handle_no_schema = ToolHandle(server="x", name="y", description="d", parameters=None)  # type: ignore[arg-type]
     out = MCPRegistry.to_provider_tools([handle_no_schema], allowed=None)
@@ -259,7 +259,7 @@ async def test_registry_discover_aggregates_across_servers(monkeypatch):
     reg = MCPRegistry()
     handles = await reg.discover(user_id=uuid.uuid4())
     names = {(h.server, h.name) for h in handles}
-    assert ("securo", "a") in names
+    assert ("talisma", "a") in names
     assert ("extra", "b") in names
 
 
@@ -288,7 +288,7 @@ async def test_registry_call_routes_via_namespaced_name():
         "jsonrpc": "2.0", "id": 1, "result": {"isError": False, "structuredContent": {"hello": "world"}, "content": []},
     }))
     reg = MCPRegistry()
-    out = await reg.call(wire_name="securo__list_accounts", arguments={}, user_id=uuid.uuid4())
+    out = await reg.call(wire_name="talisma__list_accounts", arguments={}, user_id=uuid.uuid4())
     assert out["ok"] is True
     assert out["data"] == {"hello": "world"}
 
@@ -311,7 +311,7 @@ async def test_registry_call_falls_back_to_bare_name(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_registry_call_raises_on_unknown_tool():
-    # list_tools on the only server (securo) returns no tools → unknown.
+    # list_tools on the only server (talisma) returns no tools → unknown.
     _FakeAsyncClient.queue.append(_FakeResponse(json_body={
         "jsonrpc": "2.0", "id": 1, "result": {"tools": []},
     }))
@@ -325,4 +325,4 @@ def test_registry_exposes_server_names(monkeypatch):
 
     monkeypatch.setattr(get_agent_settings(), "extra_mcp_servers", "http://b:9001/mcp|beta")
     reg = MCPRegistry()
-    assert set(reg.server_names()) == {"securo", "beta"}
+    assert set(reg.server_names()) == {"talisma", "beta"}

@@ -25,7 +25,7 @@ const TYPE_LABELS: Record<string, string> = {
   investment: 'accounts.typeInvestment',
 }
 
-// Securo fields a CSV column can be mapped to, in display order.
+// Talismã fields a CSV column can be mapped to, in display order.
 const CSV_MAPPING_FIELDS = [
   { key: 'date', label: 'import.mapDate' },
   { key: 'description', label: 'import.mapDescription' },
@@ -490,7 +490,7 @@ export default function ImportPage() {
                 </div>
               )}
 
-              {/* Column mapping — map CSV headers to Securo fields */}
+              {/* Column mapping — map CSV headers to Talismã fields */}
               {csvHeaders.length > 0 && (
                 <div className="mt-4 pt-4 border-t border-border">
                   <p className="text-xs font-medium text-muted-foreground">{t('import.columnMapping')}</p>

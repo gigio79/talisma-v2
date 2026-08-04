@@ -38,7 +38,7 @@ async def preview_import(
         filename, len(content), file.content_type,
     )
 
-    # column_mapping arrives as a JSON-encoded form field (Securo field -> CSV header)
+    # column_mapping arrives as a JSON-encoded form field (Talismã field -> CSV header)
     parsed_mapping: Optional[dict] = None
     if column_mapping:
         try:

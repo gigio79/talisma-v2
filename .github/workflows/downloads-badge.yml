@@ -19,13 +19,13 @@ jobs:
               | grep -oE 'title="[0-9]+"' \
               | grep -oE '[0-9]+'
           }
-          backend=$(count securo-backend)
-          frontend=$(count securo-frontend)
+          backend=$(count talisma-backend)
+          frontend=$(count talisma-frontend)
           if [ -z "$backend" ] || [ -z "$frontend" ]; then
             echo "Failed to parse download counts (backend='$backend', frontend='$frontend')" >&2
             exit 1
           fi
-          # Both images are required to run Securo, so the smaller count is
+          # Both images are required to run Talismã, so the smaller count is
           # the closest proxy for real installs.
           min=$(( backend < frontend ? backend : frontend ))
           if [ "$min" -ge 1000 ]; then

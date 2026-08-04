@@ -1,11 +1,11 @@
-# Contributing to Securo
+# Contributing to Talismã
 
-Thanks for your interest in contributing to Securo! This guide will help you get started.
+Thanks for your interest in contributing to Talismã! This guide will help you get started.
 
 ## Getting Started
 
 1. Fork the repository
-2. Clone your fork: `git clone https://github.com/your-username/securo.git`
+2. Clone your fork: `git clone https://github.com/your-username/talisma.git`
 3. Start the stack: `docker compose up --build`
 4. Open [http://localhost:3000](http://localhost:3000)
 
