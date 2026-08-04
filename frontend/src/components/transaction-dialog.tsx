@@ -91,6 +91,7 @@ export function TransactionDialog({
   accounts,
   recurringMatch,
   onSave,
+  onCreateInstallments,
   onDelete,
   onUnlinkTransfer,
   onIgnoreChanged,
@@ -172,7 +173,11 @@ export function TransactionDialog({
 
   return (
     <Dialog open={open} onOpenChange={onClose}>
-      <DialogContent className={cn(
+      <DialogContent
+        onOpenAutoFocus={(e) => {
+          if (transaction) e.preventDefault()
+        }}
+        className={cn(
         // Bound the dialog to the viewport (dvh accounts for mobile browser
         // chrome) and make it a flex column so the inner scroll region works
         // on small screens, not just at the sm: breakpoint (issue #286).
@@ -319,6 +324,7 @@ function TransactionForm({
   accounts,
   recurringMatch,
   onSave,
+  onCreateInstallments,
   onDelete,
   onUnlinkTransfer,
   onIgnoreChanged,
@@ -447,6 +453,7 @@ function TransactionForm({
   const pendingActionRef = useRef<SaveAction>('save')
   const formRef = useRef<HTMLFormElement>(null)
   const descriptionRef = useRef<HTMLTextAreaElement>(null)
+  const notesRef = useRef<HTMLTextAreaElement>(null)
 
   // Bank-synced descriptions are read-only and can be long; auto-grow the
   // textarea so the full text is always visible (issue #256).
@@ -714,7 +721,7 @@ function TransactionForm({
             category_id: categoryId || null,
             payee_id: payeeId || null,
             currency,
-            notes: notes.trim() || null,
+            notes: notes.trim() || undefined,
             effective_bill_date: effectiveBillDate || null,
           }, isCreating && pendingFiles.length > 0 ? pendingFiles : undefined)
           return
@@ -838,10 +845,16 @@ function TransactionForm({
             <Input
               type="number"
               step="0.01"
-              value={amount}
+              value={
+                isInstallment && installmentTotal && parseInt(installmentCount, 10) >= 2
+                  ? (parseFloat(installmentTotal) / parseInt(installmentCount, 10)).toFixed(2)
+                  : amount
+              }
               onChange={(e) => handleAmountChange(e.target.value)}
               required
               disabled={isSynced}
+              readOnly={isInstallment}
+              className={isInstallment ? 'bg-muted/40 text-muted-foreground cursor-default' : ''}
             />
           )}
         </div>
@@ -974,20 +987,35 @@ function TransactionForm({
 
       <div className="space-y-2">
         <Label>{t('transactions.notes')} <span className="text-muted-foreground font-normal text-xs">({t('transactions.notesHint')})</span></Label>
-        <textarea
-          className="w-full border border-input rounded-md px-3 py-2 text-sm bg-background resize-none focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-0"
-          rows={2}
-          value={notes}
-          onChange={(e) => setNotes(e.target.value)}
-          onFocus={() => setNotesFocused(true)}
-          onBlur={() => setNotesFocused(false)}
-          placeholder={t('transactions.notesPlaceholder')}
-        />
-        {notes === 'Auto-created from MacroDroid:' && (
-          <p className={`text-xs italic text-muted-foreground/60 transition-opacity duration-200 ${notesFocused ? 'opacity-0 h-0 overflow-hidden' : 'opacity-100'}`}>
-            ex: compra de peças pro carro
-          </p>
-        )}
+        <div className="relative">
+          <textarea
+            ref={notesRef}
+            className="w-full border border-input rounded-md px-3 py-2 text-sm bg-background resize-none focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-0"
+            rows={3}
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+            onFocus={() => {
+              setNotesFocused(true)
+              if (notes && !notes.endsWith('\n')) {
+                setNotes(prev => prev + '\n')
+                requestAnimationFrame(() => {
+                  const len = notesRef.current?.value.length ?? 0
+                  notesRef.current?.setSelectionRange(len, len)
+                })
+              } else {
+                const len = notesRef.current?.value.length ?? 0
+                notesRef.current?.setSelectionRange(len, len)
+              }
+            }}
+            onBlur={() => setNotesFocused(false)}
+            placeholder={t('transactions.notesPlaceholder')}
+          />
+          {notes === 'Criado automaticamente por MacroDroid:' && !notesFocused && (
+            <p className="absolute bottom-2 left-3 text-xs italic text-muted-foreground/60 pointer-events-none transition-opacity duration-200">
+              ex: compras para casa na loja americanas
+            </p>
+          )}
+        </div>
       </div>
 
       {/* Manual bill-cycle override (issue #92). CC accounts only. Empty
@@ -1026,11 +1054,11 @@ function TransactionForm({
         )
       })()}
 
-      {/* Installment plan — CC accounts only, create mode. Lets the user
+      {/* Installment plan — CC/checking/savings accounts, create mode. Lets the user
           bulk-create N transactions with installment metadata in one go. */}
       {isCreating && !isSynced && (() => {
         const selectedAcc = accounts.find(a => a.id === accountId)
-        if (selectedAcc?.type !== 'credit_card') return null
+        if (!selectedAcc?.type || !['credit_card', 'checking', 'savings'].includes(selectedAcc.type)) return null
         const total = parseFloat(installmentTotal) || 0
         const count = parseInt(installmentCount, 10) || 0
         const perParcela = total && count >= 2 ? (total / count) : 0
@@ -1040,7 +1068,13 @@ function TransactionForm({
               <input
                 type="checkbox"
                 checked={isInstallment}
-                onChange={(e) => setIsInstallment(e.target.checked)}
+                onChange={(e) => {
+                  const checked = e.target.checked
+                  setIsInstallment(checked)
+                  if (checked && amount && !installmentTotal) {
+                    setInstallmentTotal(amount)
+                  }
+                }}
                 className="rounded border-gray-300"
               />
               <span className="text-sm font-medium">{t('transactions.installmentPlan', 'Plano de parcelamento')}</span>

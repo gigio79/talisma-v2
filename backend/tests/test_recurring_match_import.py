@@ -24,6 +24,7 @@ async def _make_bill(session, test_workspace, test_user, account, **ov):
         type=ov.pop("type", "debit"),
         frequency=ov.pop("frequency", "monthly"),
         start_date=ov.pop("start_date", date(2026, 1, 10)),
+        auto_generate=ov.pop("auto_generate", False),  # import matching controls the bill's state
         account_id=account.id, **ov,
     )
     return await create_recurring_transaction(session, test_workspace.id, test_user.id, data)

@@ -36,6 +36,10 @@ async def account(session: AsyncSession, test_user, test_workspace) -> Account:
 
 
 async def _make_bill(session, test_workspace, test_user, account, **overrides):
+    # auto_generate defaults to False so these matching scenarios fully control
+    # when placeholders are materialized. create_recurring_transaction now
+    # auto-generates the first (overdue) occurrence when auto_generate=True —
+    # covered separately by test_create_auto_generates_first_occurrence.
     data = RecurringTransactionCreate(
         description=overrides.pop("description", "Netflix Subscription"),
         amount=overrides.pop("amount", Decimal("39.90")),
@@ -43,6 +47,7 @@ async def _make_bill(session, test_workspace, test_user, account, **overrides):
         type=overrides.pop("type", "debit"),
         frequency=overrides.pop("frequency", "monthly"),
         start_date=overrides.pop("start_date", date(2025, 1, 10)),
+        auto_generate=overrides.pop("auto_generate", False),
         account_id=account.id,
         **overrides,
     )
@@ -85,6 +90,31 @@ def test_match_window():
     assert rms._match_window("weekly") == (2, 2)
     assert rms._match_window("monthly") == (3, 5)
     assert rms._match_window("yearly") == (3, 5)
+
+
+# ---------------------------------------------------------------------------
+# create-side auto-generation (auto_generate=True default)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_create_auto_generates_first_occurrence(session, test_user, test_workspace, account):
+    """Creating a recurring transaction with auto_generate=True materializes the
+    first (already-due) occurrence immediately so it shows in the Transactions
+    tab, and advances next_occurrence past it."""
+    bill = await _make_bill(
+        session, test_workspace, test_user, account,
+        start_date=date(2025, 1, 10), auto_generate=True,
+    )
+    result = await session.execute(
+        select(Transaction).where(
+            Transaction.account_id == account.id, Transaction.source == "recurring"
+        )
+    )
+    placeholders = result.scalars().all()
+    assert len(placeholders) >= 1
+    assert all(t.recurring_transaction_id == bill.id for t in placeholders)
+    assert bill.next_occurrence > date(2025, 1, 10)
 
 
 # ---------------------------------------------------------------------------
@@ -225,6 +255,10 @@ async def test_advance_past_early_charge_still_advances(session, test_user, test
 async def test_generate_pending_links_existing_real_tx(session, test_user, test_workspace, account):
     """A synced charge that already covers the occurrence is linked, not duplicated."""
     bill = await _make_bill(session, test_workspace, test_user, account)
+    # Legacy-style bill (created before create-side auto-generation): not yet
+    # materialized, but auto_generate on so generate_pending processes it.
+    bill.auto_generate = True
+    await session.commit()
     real = await _add_tx(
         session, test_user, test_workspace, account,
         date=date(2025, 1, 11), source="sync", external_id="bank-1",
@@ -246,6 +280,8 @@ async def test_generate_pending_links_existing_real_tx(session, test_user, test_
 @pytest.mark.asyncio
 async def test_generate_pending_stamps_placeholder_link(session, test_user, test_workspace, account):
     bill = await _make_bill(session, test_workspace, test_user, account)
+    bill.auto_generate = True
+    await session.commit()
     count = await generate_pending(session, test_user.id, up_to=date(2025, 1, 20))
     assert count == 1
     result = await session.execute(
@@ -274,6 +310,8 @@ async def test_generate_pending_description_mismatch_creates_placeholder(
     must NOT be swallowed as the bill's occurrence; a placeholder is written and
     the real charge is left untouched."""
     bill = await _make_bill(session, test_workspace, test_user, account)
+    bill.auto_generate = True
+    await session.commit()
     unrelated = await _add_tx(
         session, test_user, test_workspace, account,
         date=date(2025, 1, 10), source="sync", external_id="bank-x",

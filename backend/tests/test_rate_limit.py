@@ -48,8 +48,8 @@ def _override_redis_with_counter(_mock_redis):
 
 
 async def test_login_rate_limit(client: AsyncClient, test_user):
-    """After 5 failed attempts, the 6th should get 429."""
-    for i in range(5):
+    """After 10 failed attempts, the 11th should get 429."""
+    for i in range(10):
         response = await client.post(
             "/api/auth/login",
             data={"username": "test@example.com", "password": "wrongpassword"},
@@ -58,7 +58,7 @@ async def test_login_rate_limit(client: AsyncClient, test_user):
         # Should get 400 (bad credentials), not 429
         assert response.status_code == 400, f"Request {i+1} got {response.status_code}"
 
-    # 6th request should be rate limited
+    # 11th request should be rate limited
     response = await client.post(
         "/api/auth/login",
         data={"username": "test@example.com", "password": "wrongpassword"},

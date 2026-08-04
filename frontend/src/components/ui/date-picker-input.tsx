@@ -15,6 +15,8 @@ interface DatePickerInputProps {
   className?: string
   disabled?: boolean
   align?: 'start' | 'center' | 'end'
+  minDate?: Date
+  maxDate?: Date
 }
 
 function DatePickerInput({
@@ -24,6 +26,8 @@ function DatePickerInput({
   className,
   disabled,
   align = 'start',
+  minDate,
+  maxDate,
 }: DatePickerInputProps) {
   const { i18n } = useTranslation()
   const [open, setOpen] = useState(false)
@@ -57,6 +61,8 @@ function DatePickerInput({
           locale={dateFnsLocale}
           selected={selectedDate}
           defaultMonth={selectedDate ?? new Date()}
+          minDate={minDate}
+          maxDate={maxDate}
           onSelect={(date) => {
             if (!date) return
             onChange(format(date, 'yyyy-MM-dd'))

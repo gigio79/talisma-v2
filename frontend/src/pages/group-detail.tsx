@@ -206,7 +206,7 @@ export default function GroupDetailPage() {
   const [editingMember, setEditingMember] = useState<GroupMember | null>(null)
   const [memberName, setMemberName] = useState('')
   const [memberEmail, setMemberEmail] = useState('')
-  // The Securo user this member should be linked to (if any). When set,
+  // The Talismã user this member should be linked to (if any). When set,
   // name+email are derived from that user and the inputs are locked —
   // is_self is auto-inferred (true iff the linked user is the viewer).
   const [memberLinkedUserId, setMemberLinkedUserId] = useState<string | null>(null)
@@ -978,7 +978,7 @@ export default function GroupDetailPage() {
                 {t('common.delete')}
               </Button>
             )}
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2 justify-end">
               <Button variant="outline" onClick={() => setMemberDialogOpen(false)}>
                 {t('common.cancel')}
               </Button>

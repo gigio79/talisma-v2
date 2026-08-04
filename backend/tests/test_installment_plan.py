@@ -143,14 +143,42 @@ async def test_create_installment_plan_monthly_dates(
 async def test_create_installment_plan_wrong_account_type(
     session: AsyncSession, test_user, test_workspace, test_categories
 ):
-    """Installment plans require a credit-card account."""
+    """Installment plans require credit_card, checking, or savings accounts."""
+    wallet = Account(
+        id=uuid.uuid4(),
+        user_id=test_user.id,
+        workspace_id=test_workspace.id,
+        name="Wallet",
+        type="wallet",
+        balance=Decimal("1000.00"),
+        currency="BRL",
+    )
+    session.add(wallet)
+    await session.commit()
+
+    data = InstallmentPlanCreate(
+        account_id=wallet.id,
+        description="Should fail",
+        total_amount=Decimal("1000.00"),
+        num_installments=2,
+        purchase_date=date(2026, 1, 1),
+    )
+    with pytest.raises(ValueError, match="credit_card, checking, or savings"):
+        await create_installment_plan(session, test_workspace.id, test_user.id, data)
+
+
+@pytest.mark.asyncio
+async def test_create_installment_plan_checking_account(
+    session: AsyncSession, test_user, test_workspace, test_categories
+):
+    """Installment plans also work for checking (debit/boleto) accounts."""
     checking = Account(
         id=uuid.uuid4(),
         user_id=test_user.id,
         workspace_id=test_workspace.id,
-        name="Checking",
+        name="Conta Corrente",
         type="checking",
-        balance=Decimal("1000.00"),
+        balance=Decimal("5000.00"),
         currency="BRL",
     )
     session.add(checking)
@@ -158,13 +186,18 @@ async def test_create_installment_plan_wrong_account_type(
 
     data = InstallmentPlanCreate(
         account_id=checking.id,
-        description="Should fail",
-        total_amount=Decimal("1000.00"),
-        num_installments=2,
+        description="Notebook parcelado",
+        total_amount=Decimal("2400.00"),
+        num_installments=6,
         purchase_date=date(2026, 1, 1),
     )
-    with pytest.raises(ValueError, match="credit-card"):
-        await create_installment_plan(session, test_workspace.id, test_user.id, data)
+    txns = await create_installment_plan(session, test_workspace.id, test_user.id, data)
+
+    assert len(txns) == 6
+    for i, tx in enumerate(txns):
+        assert tx.account_id == checking.id
+        assert tx.effective_bill_date is None
+        assert tx.date == date(2026, 1 + i, 1)
 
 
 @pytest.mark.asyncio
@@ -268,22 +301,22 @@ async def test_installments_api_endpoint(
 async def test_installments_api_rejects_non_cc(
     client, auth_headers, test_user, test_workspace, test_categories
 ):
-    checking = Account(
+    wallet = Account(
         id=uuid.uuid4(),
         user_id=test_user.id,
         workspace_id=test_workspace.id,
-        name="Checking",
-        type="checking",
+        name="Wallet",
+        type="wallet",
         balance=Decimal("5000.00"),
         currency="BRL",
     )
     from tests.conftest import TestSessionLocal
     async with TestSessionLocal() as session:
-        session.add(checking)
+        session.add(wallet)
         await session.commit()
 
     payload = {
-        "account_id": str(checking.id),
+        "account_id": str(wallet.id),
         "description": "Should fail",
         "total_amount": "1000.00",
         "num_installments": 3,

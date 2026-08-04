@@ -1049,8 +1049,11 @@ class TestRecurringTransactionStamping:
             start_date=start,
             account_id=test_account.id,
             currency="BRL",
+            auto_generate=False,  # legacy-style bill: generate_pending processes it explicitly
         )
-        await create_recurring_transaction(session, test_workspace.id, test_user.id, data)
+        rec = await create_recurring_transaction(session, test_workspace.id, test_user.id, data)
+        rec.auto_generate = True
+        await session.commit()
 
         count = await generate_pending(session, test_user.id, up_to=date.today())
         assert count >= 1

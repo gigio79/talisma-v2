@@ -24,6 +24,8 @@ interface CalendarProps {
   mode?: 'single'
   selected?: Date
   defaultMonth?: Date
+  minDate?: Date
+  maxDate?: Date
   locale?: Locale
   onSelect?: (date: Date | undefined) => void
   className?: string
@@ -35,6 +37,8 @@ const YEAR_PAGE_SIZE = 12
 function Calendar({
   selected,
   defaultMonth,
+  minDate,
+  maxDate,
   locale,
   onSelect,
   className,
@@ -136,16 +140,22 @@ function Calendar({
                 const inMonth = isSameMonth(d, viewMonth)
                 const isSelected = selected && isSameDay(d, selected)
                 const today = isToday(d)
+                const outOfRange =
+                  (minDate && d < minDate) || (maxDate && d > maxDate)
 
                 return (
                   <button
                     key={`${wi}-${di}`}
                     type="button"
-                    onClick={() => onSelect?.(d)}
+                    disabled={outOfRange}
+                    onClick={() => {
+                      if (!outOfRange) onSelect?.(d)
+                    }}
                     className={cn(
                       'size-8 inline-flex items-center justify-center rounded-lg text-sm transition-colors',
-                      !inMonth && 'text-muted-foreground/40',
-                      inMonth && !isSelected && 'text-foreground hover:bg-muted/60',
+                      !inMonth && !outOfRange && 'text-muted-foreground/40',
+                      inMonth && !isSelected && !outOfRange && 'text-foreground hover:bg-muted/60',
+                      outOfRange && 'text-muted-foreground/25 pointer-events-none',
                       today && !isSelected && 'bg-accent text-accent-foreground font-medium',
                       isSelected && 'bg-primary text-primary-foreground font-semibold',
                     )}

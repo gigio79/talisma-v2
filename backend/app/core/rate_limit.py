@@ -36,6 +36,6 @@ class RateLimiter:
             )
 
 
-login_rate_limit = RateLimiter(max_requests=5, window_seconds=60)
+login_rate_limit = RateLimiter(max_requests=10, window_seconds=60)
 register_rate_limit = RateLimiter(max_requests=3, window_seconds=3600)
 password_reset_rate_limit = RateLimiter(max_requests=3, window_seconds=3600)
