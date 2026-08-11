@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 
 from app.parsing.base import (
+    DEBITO,
     PIX_ENVIADO,
     PIX_RECEBIDO,
     BaseParser,
@@ -24,9 +25,11 @@ _PIX_RECEBIDO_TITULO = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 
-# "Você recebeu um Pix de R$X" without a sender name.
+# "Você recebeu um Pix de R$X" without a sender name. The "PicPay • agora"
+# prefix is optional — recent notifications may omit it entirely, e.g.
+# "Você recebeu um Pix de R$ 0,01. Toque para visualizar o pagamento".
 _PIX_RECEBIDO_VALOR = re.compile(
-    r"PicPay\s*[•·]\s*agora"
+    r"(?:PicPay\s*[•·]\s*agora)?"
     r"\s*(?:Vo[cç][eéê]\s+)?recebeu\s+um\s+Pix\s+de\s+R\$\s*([\d.,]+)",
     re.IGNORECASE | re.DOTALL,
 )
@@ -42,6 +45,19 @@ _PIX_ENVIADO = re.compile(
     r"PicPay\s*[•·]\s*agora"
     r"\s*(?:Vo[cç][eéê]\s+)?enviou\s+um\s+Pix\s+(?:no\s+valor\s+de\s+)?R\$\s*([\d.,]+)\s+para\s+"
     r"(.+?)(?:\.|$)",
+    re.IGNORECASE | re.DOTALL,
+)
+
+# Screen/OCR macro: "Pix enviado para NOME no valor de R$ X" (débito). The
+# value and recipient already come pre-assembled in the text.
+_PIX_ENVIADO_TELA = re.compile(
+    r"\s*Pix\s+enviado\s+para\s+(.+?)\s+no\s+valor\s+de\s+R\$\s*([\d.,]+)",
+    re.IGNORECASE | re.DOTALL,
+)
+
+# "Compra de R$ 38,00 em Cido Motos foi APROVADA." (débito)
+_COMPRA_APROVADA = re.compile(
+    r"\s*Compra\s+de\s+R\$\s*([\d.,]+)\s+em\s+(.+?)\s+foi\s+APROVADA\.?",
     re.IGNORECASE | re.DOTALL,
 )
 
@@ -111,6 +127,35 @@ class PicPayParser(BaseParser):
                 movement_type=PIX_ENVIADO,
                 valor=valor,
                 origem_destino=nome,
+                notificacao_original=text,
+            )
+
+        # Outgoing Pix from the screen/OCR macro (débito).
+        m = _PIX_ENVIADO_TELA.search(text)
+        if m:
+            valor = _parse_valor(m.group(2))
+            nome = m.group(1).strip().rstrip(".")
+            if valor is None:
+                return None
+            return make_transaction(
+                banco_app=banco,
+                movement_type=PIX_ENVIADO,
+                valor=valor,
+                origem_destino=nome,
+                notificacao_original=text,
+            )
+
+        # Card purchase approved (débito).
+        m = _COMPRA_APROVADA.search(text)
+        if m:
+            valor = _parse_valor(m.group(1))
+            if valor is None:
+                return None
+            return make_transaction(
+                banco_app=banco,
+                movement_type=DEBITO,
+                valor=valor,
+                origem_destino=m.group(2).strip().rstrip(" -"),
                 notificacao_original=text,
             )
 

@@ -267,6 +267,50 @@ async def test_delete_recurring_transaction(client, auth_headers, test_account):
 
 
 @pytest.mark.asyncio
+async def test_patch_recurring_category_propagates_to_linked_transactions(
+    client, auth_headers, test_categories, test_account
+):
+    """PATCHing category_id on a recurring re-categorizes every linked
+    transaction (including already posted ones), not just future placeholders."""
+    start_date = (date.today() - timedelta(days=40)).isoformat()
+
+    create_resp = await client.post(
+        "/api/recurring-transactions",
+        json={
+            "description": "Conta de Luz",
+            "amount": 200.00,
+            "currency": "BRL",
+            "type": "debit",
+            "frequency": "monthly",
+            "start_date": start_date,
+            "category_id": str(test_categories[0].id),
+            "account_id": str(test_account.id),
+        },
+        headers=auth_headers,
+    )
+    assert create_resp.status_code == 201
+    rec_id = create_resp.json()["id"]
+
+    patch_resp = await client.patch(
+        f"/api/recurring-transactions/{rec_id}",
+        json={"category_id": str(test_categories[1].id)},
+        headers=auth_headers,
+    )
+    assert patch_resp.status_code == 200
+    assert patch_resp.json()["category_id"] == str(test_categories[1].id)
+
+    tx_list = await client.get(
+        "/api/transactions",
+        params={"from": start_date, "to": date.today().isoformat()},
+        headers=auth_headers,
+    )
+    assert tx_list.status_code == 200
+    luz_txs = [t for t in tx_list.json()["items"] if t["description"] == "Conta de Luz"]
+    assert len(luz_txs) >= 1
+    assert all(t["category_id"] == str(test_categories[1].id) for t in luz_txs)
+
+
+@pytest.mark.asyncio
 async def test_create_recurring_without_account_rejected(client, auth_headers):
     """Omitting account_id should return a validation error, not a 500 later."""
     response = await client.post(

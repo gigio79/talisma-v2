@@ -38,6 +38,11 @@ import type {
   MarketSymbolQuote,
   Attachment,
   Goal,
+  Notification,
+  UnreadCount,
+  PushVapidKey,
+  PushSubscriptionInfo,
+  PushTestResult,
   GoalSummary,
   DashboardSummary,
   SpendingByCategory,
@@ -941,6 +946,61 @@ export const goals = {
   },
   summary: async (limit = 3): Promise<GoalSummary[]> => {
     const { data } = await api.get('/goals/summary', { params: { limit } })
+    return data
+  },
+}
+
+// Notifications
+export const notifications = {
+  list: async (status?: string): Promise<Notification[]> => {
+    const { data } = await api.get('/notifications', { params: { status } })
+    return data
+  },
+  unreadCount: async (): Promise<UnreadCount> => {
+    const { data } = await api.get('/notifications/unread-count')
+    return data
+  },
+  markRead: async (id: string): Promise<Notification> => {
+    const { data } = await api.post(`/notifications/${id}/read`)
+    return data
+  },
+  dismiss: async (id: string): Promise<void> => {
+    await api.post(`/notifications/${id}/dismiss`)
+  },
+  markAllRead: async (): Promise<UnreadCount> => {
+    const { data } = await api.post('/notifications/read-all')
+    return data
+  },
+}
+
+// Push subscriptions (Web Push / VAPID)
+export const push = {
+  vapidKey: async (): Promise<PushVapidKey> => {
+    const { data } = await api.get('/notifications/push-vapid-key')
+    return data
+  },
+  subscribe: async (
+    endpoint: string,
+    keys: { p256dh: string; auth: string },
+    deviceLabel?: string,
+  ): Promise<PushSubscriptionInfo> => {
+    const { data } = await api.post('/notifications/push-subscription', {
+      endpoint,
+      p256dh: keys.p256dh,
+      auth: keys.auth,
+      device_label: deviceLabel,
+    })
+    return data
+  },
+  unsubscribe: async (subscriptionId: string): Promise<void> => {
+    await api.delete(`/notifications/push-subscription/${subscriptionId}`)
+  },
+  list: async (): Promise<PushSubscriptionInfo[]> => {
+    const { data } = await api.get('/notifications/push-subscription')
+    return data
+  },
+  sendTest: async (): Promise<PushTestResult> => {
+    const { data } = await api.post('/notifications/push-test')
     return data
   },
 }

@@ -404,6 +404,81 @@ class TestParseCsvColumnMapping:
         assert transactions[1].type == "credit"
         assert transactions[1].amount == Decimal("4200.00")
 
+    def test_parse_csv_type_column_single_letters(self):
+        """A type column with C/D (Brazilian bank convention) drives credit/debit."""
+        csv_content = (
+            "data,descricao,valor,tipo\n"
+            "10/02/2026,UBER TRIP,25.50,D\n"
+            "12/02/2026,PIX RECEBIDO,150.00,C\n"
+        )
+        transactions = parse_csv(csv_content.encode("utf-8"))
+        assert len(transactions) == 2
+        assert transactions[0].type == "debit"
+        assert transactions[0].amount == Decimal("25.50")
+        assert transactions[1].type == "credit"
+        assert transactions[1].amount == Decimal("150.00")
+
+    def test_parse_csv_type_column_local_terms(self):
+        """Portuguese type values (Entrada/Saída) are recognized."""
+        csv_content = (
+            "data,descricao,valor,tipo\n"
+            "10/02/2026,FARMACIA,45.00,SAIDA\n"
+            "12/02/2026,SALARIO,3000.00,ENTRADA\n"
+        )
+        transactions = parse_csv(csv_content.encode("utf-8"))
+        assert transactions[0].type == "debit"
+        assert transactions[1].type == "credit"
+
+    def test_parse_csv_accented_portuguese_columns(self):
+        """Accented Portuguese headers (descrição, taxa de câmbio) auto-detect."""
+        csv_content = (
+            "data,descrição,valor,moeda,taxa de câmbio\n"
+            "2026-01-15,Mercado,-120.50,USD,\n"
+            "2026-01-20,Salário,5000.00,EUR,1.08\n"
+        )
+        transactions = parse_csv(csv_content.encode("utf-8"))
+        assert len(transactions) == 2
+        assert transactions[0].description == "Mercado"
+        assert transactions[0].type == "debit"
+        assert transactions[0].currency == "USD"
+        assert transactions[0].fx_rate is None
+        assert transactions[1].description == "Salário"
+        assert transactions[1].type == "credit"
+        assert transactions[1].currency == "EUR"
+        assert transactions[1].fx_rate == Decimal("1.08")
+
+    def test_parse_csv_accented_historico_lancamento(self):
+        """histórico/lançamento are accepted as description columns."""
+        csv_content = (
+            "data,histórico,valor\n"
+            "2026-01-15,COMERCIO,-20.00\n"
+        )
+        assert parse_csv(csv_content.encode("utf-8"))[0].description == "COMERCIO"
+
+        csv_content2 = (
+            "data,lançamento,valor\n"
+            "2026-01-15,COMPRA,-30.00\n"
+        )
+        assert parse_csv(csv_content2.encode("utf-8"))[0].description == "COMPRA"
+
+    def test_parse_csv_latin1_encoding(self):
+        """Latin-1/Windows-1252 encoded CSVs parse without errors."""
+        csv_content = (
+            "data,descricao,valor\n"
+            "10/02/2026,CAFÉ DA MANHÃ,-25.50\n"
+        )
+        transactions = parse_csv(csv_content.encode("latin-1"))
+        assert len(transactions) == 1
+        assert transactions[0].description == "CAFÉ DA MANHÃ"
+        assert transactions[0].amount == Decimal("25.50")
+
+    def test_detect_csv_columns_latin1_encoding(self):
+        """Header detection also falls back to Latin-1."""
+        csv_content = "data,descrição,valor\n10/02/2026,X,-1.00\n"
+        assert detect_csv_columns(csv_content.encode("latin-1")) == [
+            "data", "descrição", "valor",
+        ]
+
     def test_column_mapping_with_explicit_date_format(self):
         """Column mapping composes with an explicit date_format."""
         csv_content = (

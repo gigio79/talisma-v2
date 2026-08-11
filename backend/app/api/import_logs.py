@@ -52,7 +52,13 @@ async def delete_import_log(
     session: AsyncSession = Depends(get_async_session),
 ):
     import uuid as _uuid
-    log_id = _uuid.UUID(import_log_id)
+    try:
+        log_id = _uuid.UUID(import_log_id)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid import log ID",
+        )
 
     result = await session.execute(
         select(ImportLog).where(

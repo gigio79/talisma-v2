@@ -1233,7 +1233,15 @@ export default function AccountDetailPage() {
                         }}
                       >
                         <td className="px-3 sm:px-4 py-3 text-xs text-muted-foreground whitespace-nowrap">
-                          {formatDateStr(tx.date, dateLocale)}
+                          {formatDateStr(isCreditCard ? (tx.effective_bill_date ?? tx.effective_date) : tx.date, dateLocale)}
+                          {isCreditCard && (tx.effective_bill_date ?? tx.effective_date) !== tx.date && (
+                            <span
+                              className="block text-[10px] text-muted-foreground/70 whitespace-nowrap"
+                              title={t('transactions.purchasedOn', { date: formatDateStr(tx.date, dateLocale) })}
+                            >
+                              {t('transactions.purchasedOn', { date: formatDateStr(tx.date, dateLocale) })}
+                            </span>
+                          )}
                         </td>
                         <td className="px-3 sm:px-4 py-3">
                           <div>

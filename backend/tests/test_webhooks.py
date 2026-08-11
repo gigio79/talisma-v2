@@ -81,12 +81,82 @@ async def test_webhook_cria_transacao_picpay(client, session, test_user, test_wo
     assert tx.source_app == "PicPay"
     assert tx.sender == "Giovanni"
     assert tx.notes.startswith(NOTES_FIXO)
-    assert tx.payee == "GIOVANNI BISPO teste"
+    assert tx.payee is None  # beneficiary is not auto-filled
     assert tx.card_last4 is None
     assert tx.needs_review is False
     assert tx.raw_data["notificacao_original"] == _payload(
         "PicPay • agoraGIOVANNI BISPO teste enviou um Pix para vocêVocê recebeu um Pix de R$0,65.",
     )["text"]
+
+
+async def test_webhook_picpay_pix_enviado_tela(client, session, test_user, test_workspace, webhook_settings):
+    response = await client.post(
+        "/api/webhooks/macrodroid",
+        json=_payload(
+            "Pix enviado para Debora Ribeiro de Campos no valor de R$ 0,01",
+            workspace_id=str(test_workspace.id),
+        ),
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["status"] == "ok"
+    assert body["amount"] == "0.01"
+    assert body["type"] == "debit"
+    assert body["movement_type"] == "pix_enviado"
+    assert body["needs_review"] is False
+
+    tx = await _last_transaction(session, body["description"])
+    assert tx.description == "Pix enviado para Debora Ribeiro de Campos via PicPay"
+    assert tx.amount == Decimal("0.01")
+    assert tx.type == "debit"
+    assert tx.movement_type == "pix_enviado"
+    assert tx.source_app == "PicPay"
+    assert tx.sender == "Giovanni"
+    assert tx.needs_review is False
+
+
+async def test_webhook_roteia_para_conta_existente_por_nome_contem(
+    client, session, test_user, test_workspace, webhook_settings
+):
+    picpay = await _create_account(session, test_workspace.id, test_user.id, "PicPay-Giovanni", "checking")
+
+    response = await client.post(
+        "/api/webhooks/macrodroid",
+        json=_payload(
+            "Pix enviado para Debora Ribeiro de Campos no valor de R$ 0,01",
+            sender="Giovanni",
+            workspace_id=str(test_workspace.id),
+        ),
+    )
+    assert response.status_code == 200, response.text
+    tx = await _last_transaction(session, response.json()["description"])
+    assert tx.account_id == picpay.id
+
+    # No phantom "PicPay" account should have been auto-created.
+    result = await session.execute(
+        select(Account).where(Account.workspace_id == test_workspace.id, Account.name == "PicPay")
+    )
+    assert result.scalar_one_or_none() is None
+
+
+async def test_webhook_prefere_conta_do_sender_entre_duas_do_mesmo_app(
+    client, session, test_user, test_workspace, webhook_settings
+):
+    debora = await _add_member_user(session, test_workspace.id, "debora@example.com", "Débora")
+    debora_picpay = await _create_account(session, test_workspace.id, debora.id, "PicPay-Débora", "checking")
+    await _create_account(session, test_workspace.id, debora.id, "PicPay-Giovanni", "checking")
+
+    response = await client.post(
+        "/api/webhooks/macrodroid",
+        json=_payload(
+            "Pix enviado para Debora Ribeiro de Campos no valor de R$ 0,01",
+            sender="Débora",
+            workspace_id=str(test_workspace.id),
+        ),
+    )
+    assert response.status_code == 200, response.text
+    tx = await _last_transaction(session, response.json()["description"])
+    assert tx.account_id == debora_picpay.id
 
 
 async def test_webhook_compra_credito_salva_cartao_final(client, session, test_user, test_workspace, webhook_settings):
@@ -390,7 +460,7 @@ async def test_webhook_pix_sem_conta_corrente_usa_primeira_conta_do_app(
     assert tx.account_id == cartao.id
 
 
-async def test_webhook_estabelecimento_preenchido_pelo_usuario_priorizado(
+async def test_webhook_estabelecimento_ignorado_descricao_do_parser(
     client, session, test_user, test_workspace, webhook_settings
 ):
     response = await client.post(
@@ -405,14 +475,14 @@ async def test_webhook_estabelecimento_preenchido_pelo_usuario_priorizado(
     )
     assert response.status_code == 200, response.text
     body = response.json()
-    assert body["description"] == "Pix recebido de pão de açúcar via Neon"
-    assert body["payee"] == "pão de açúcar"
+    assert body["description"] == "Pix recebido de Giovanni Bispo Dos Reis Silva via Neon"
+    assert body["payee"] is None
     assert body["needs_review"] is False
 
     tx = await _last_transaction(session, body["description"])
-    assert tx.description == "Pix recebido de pão de açúcar via Neon"
-    assert tx.payee == "pão de açúcar"
-    assert tx.payee_id is not None  # establishment becomes a Payee entity
+    assert tx.description == "Pix recebido de Giovanni Bispo Dos Reis Silva via Neon"
+    assert tx.payee is None  # beneficiary not auto-filled
+    assert tx.payee_id is None
     assert tx.amount == Decimal("0.01")
     assert tx.type == "credit"
     assert tx.movement_type == "pix_recebido"
@@ -436,11 +506,11 @@ async def test_webhook_sem_estabelecimento_usa_nome_do_parser(
     body = response.json()
     assert body["description"] == "Pix recebido de Giovanni Bispo Dos Reis Silva via Neon"
     tx = await _last_transaction(session, body["description"])
-    assert tx.payee == "Giovanni Bispo Dos Reis Silva"
+    assert tx.payee is None  # beneficiary not auto-filled
     assert tx.needs_review is False
 
 
-async def test_webhook_categoria_existente_ligada_case_insensitive(
+async def test_webhook_categoria_existente_ignorada(
     client, session, test_user, test_workspace, webhook_settings
 ):
     from app.schemas.category import CategoryCreate
@@ -464,17 +534,17 @@ async def test_webhook_categoria_existente_ligada_case_insensitive(
         ),
     )
     assert response.status_code == 200, response.text
-    assert response.json()["category"] == "Padaria"
+    assert response.json()["category"] is None  # category auto-fill disabled
     tx = await _last_transaction(session, response.json()["description"])
-    assert tx.category_id == categoria.id
+    assert tx.category_id is None
 
     result = await session.execute(
         select(Category).where(Category.workspace_id == test_workspace.id)
     )
-    assert len(result.scalars().all()) == 1  # no duplicate created
+    assert len(result.scalars().all()) == 1  # only the manually created one
 
 
-async def test_webhook_categoria_inexistente_auto_criada(
+async def test_webhook_categoria_nao_auto_criada(
     client, session, test_user, test_workspace, webhook_settings
 ):
     response = await client.post(
@@ -488,20 +558,15 @@ async def test_webhook_categoria_inexistente_auto_criada(
         ),
     )
     assert response.status_code == 200, response.text
-    assert response.json()["category"] == "padaria"
+    assert response.json()["category"] is None
 
     tx = await _last_transaction(session, response.json()["description"])
-    assert tx.category_id is not None
+    assert tx.category_id is None
 
     result = await session.execute(
         select(Category).where(Category.workspace_id == test_workspace.id)
     )
-    cats = result.scalars().all()
-    assert len(cats) == 1
-    assert cats[0].name == "padaria"
-    assert cats[0].is_system is False
-    assert cats[0].group_id is None
-    assert cats[0].id == tx.category_id
+    assert len(result.scalars().all()) == 0  # nothing auto-created
 
 
 async def test_webhook_exemplo_completo_do_prompt(
@@ -520,30 +585,26 @@ async def test_webhook_exemplo_completo_do_prompt(
     )
     assert response.status_code == 200, response.text
     body = response.json()
-    assert body["description"] == "Pix recebido de pão de açúcar via Neon"
+    assert body["description"] == "Pix recebido de Giovanni Bispo Dos Reis Silva via Neon"
     assert body["amount"] == "0.01"
-    assert body["category"] == "padaria"
-    assert body["payee"] == "pão de açúcar"
+    assert body["category"] is None  # category auto-fill disabled
+    assert body["payee"] is None
     assert body["type"] == "credit"
     assert body["movement_type"] == "pix_recebido"
     assert body["needs_review"] is False
 
     tx = await _last_transaction(session, body["description"])
-    assert tx.description == "Pix recebido de pão de açúcar via Neon"
+    assert tx.description == "Pix recebido de Giovanni Bispo Dos Reis Silva via Neon"
     assert tx.amount == Decimal("0.01")
     assert tx.type == "credit"
     assert tx.movement_type == "pix_recebido"
     assert tx.needs_review is False
-    assert tx.payee == "pão de açúcar"
-    assert tx.payee_id is not None
-    assert tx.category_id is not None
-    result = await session.execute(
-        select(Category).where(Category.id == tx.category_id)
-    )
-    assert result.scalar_one().name == "padaria"
+    assert tx.payee is None
+    assert tx.payee_id is None
+    assert tx.category_id is None
 
 
-async def test_webhook_categoria_repetida_nao_duplica(
+async def test_webhook_categoria_repetida_nao_cria_nada(
     client, session, test_user, test_workspace, webhook_settings
 ):
     for _ in range(2):
@@ -561,7 +622,7 @@ async def test_webhook_categoria_repetida_nao_duplica(
     result = await session.execute(
         select(Category).where(Category.workspace_id == test_workspace.id)
     )
-    assert len(result.scalars().all()) == 1
+    assert len(result.scalars().all()) == 0
 
     txs = (
         await session.execute(
@@ -569,5 +630,5 @@ async def test_webhook_categoria_repetida_nao_duplica(
         )
     ).scalars().all()
     assert len(txs) == 2
-    assert txs[0].category_id == txs[1].category_id
-    assert txs[0].category_id is not None
+    assert txs[0].category_id is None
+    assert txs[1].category_id is None

@@ -5,6 +5,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import get_settings
 from app.core.database import get_async_session
 from app.core.workspace_context import (
     WorkspaceContext,
@@ -32,6 +33,13 @@ async def preview_import(
 ):
     content = await file.read()
     filename = file.filename or ""
+
+    max_bytes = get_settings().import_max_file_size_mb * 1024 * 1024
+    if len(content) > max_bytes:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"File exceeds the {get_settings().import_max_file_size_mb} MB import limit",
+        )
 
     logger.info(
         "Import preview requested: filename=%s, size=%d bytes, content_type=%s",
@@ -144,6 +152,13 @@ async def import_transactions(
     ctx: WorkspaceContext = Depends(current_writable_workspace),
     session: AsyncSession = Depends(get_async_session),
 ):
+    max_transactions = get_settings().import_max_transactions
+    if len(data.transactions) > max_transactions:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"Import exceeds the {max_transactions} transaction limit",
+        )
+
     # Verify the target account lives in this workspace BEFORE doing any
     # writes — otherwise a hand-rolled request could import into an
     # account owned by another tenant.

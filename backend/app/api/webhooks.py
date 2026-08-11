@@ -1,8 +1,14 @@
 """Webhook endpoint for receiving MacroDroid notifications.
 
 MacroDroid sends notification text from banking apps (PicPay, Neon, Nubank, etc.)
-which is parsed into structured transactions. Authentication is via a shared API
-key in the Authorization header (Bearer <key>).
+which is parsed into structured transactions. Authentication is via HTTP Basic
+Auth (``talisma`` + shared secret) or, for backwards compatibility, a Bearer
+token in the Authorization header.
+
+A ``descricao`` field built by MacroDroid (``PIX ENVIADO DE {APP} PARA {NOME}``)
+is the authoritative display text; ``text`` is only used for the amount, and
+``horario`` sets the transaction date. Duplicate notifications are suppressed
+via a SHA-256 fingerprint of text + horario + descricao.
 
 Fallback rules (from the MacroDroid spec):
 - No value extracted → transaction is NOT created; a log entry + admin alert
@@ -12,16 +18,21 @@ Fallback rules (from the MacroDroid spec):
 - Value found but no establishment → "Estabelecimento não identificado"
   placeholder and ``needs_review`` is flagged.
 """
+import base64
+import binascii
+import hashlib
 import logging
+import re
+import secrets
 import unicodedata
 import uuid
 from dataclasses import replace
-from datetime import date, datetime
+from datetime import datetime
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, Header, HTTPException
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
@@ -34,22 +45,19 @@ from app.parsing import parse_notification
 from app.parsing.base import (
     CREDITO,
     DEBITO,
+    MOVEMENT_TO_TIPO,
     PIX_ENVIADO,
     PIX_RECEBIDO,
     ParsedTransaction,
     build_description,
 )
 from app.schemas.webhook import MacroDroidPayload
-from app.services.payee_service import get_or_create_payee
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/webhooks", tags=["webhooks"])
 
 NOTES_FIXO = "Criado automaticamente pelo MacroDroid:"
-
-# Placeholder payees that should not become a transaction's `payee`.
-_PAYEE_PLACEHOLDERS = {"Não informado", "Estabelecimento não identificado"}
 
 # Granular movement type → account type the transaction must land on.
 _TIPO_CONTA_POR_MOVIMENTO = {
@@ -69,6 +77,67 @@ def _normalize_name(value: str) -> str:
     """Lowercase and strip accents for loose name matching."""
     value = unicodedata.normalize("NFKD", value).encode("ascii", "ignore").decode("ascii")
     return value.strip().lower()
+
+
+# MacroDroid-built description ("descricao"), which always arrives as
+# "PIX ENVIADO DE {APP} PARA {NOME}" (app already uppercased by MacroDroid).
+# Also accepts the "PIX RECEBIDO DE {APP} DE {NOME}" variant.
+_DESCRICAO_PIX = re.compile(
+    r"^\s*PIX\s+(ENVIADO|RECEBIDO)\s+DE\s+(.+?)\s+(?:PARA|DE)\s*(.*?)\s*$",
+    re.IGNORECASE,
+)
+
+# Placeholder beneficiary when the MacroDroid description ends in "PARA"
+# with no name (spec fallback).
+DESTINATARIO_NAO_INFORMADO = "Destinatário não informado"
+
+
+def _parse_descricao(descricao: str | None) -> tuple[str, str, str] | None:
+    """Parse the MacroDroid ``descricao`` into ``(movement, app, beneficiary)``.
+
+    Expected format: ``"PIX ENVIADO DE NEON PARA PADARIA"``. The beneficiary
+    may be empty (``"PIX ENVIADO DE NEON PARA"``). Returns ``None`` when the
+    string doesn't match the structured pattern — the caller then keeps the
+    fields parsed from ``text``.
+    """
+    if not descricao or not descricao.strip():
+        return None
+    m = _DESCRICAO_PIX.match(descricao.strip())
+    if not m:
+        return None
+    movement = PIX_ENVIADO if m.group(1).upper() == "ENVIADO" else PIX_RECEBIDO
+    return movement, m.group(2).strip(), m.group(3).strip()
+
+
+_HORARIO_FORMATS = ("%d/%m/%Y %H:%M:%S", "%d/%m/%Y")
+
+
+def _parse_horario(horario: str | None) -> datetime | None:
+    """Parse the MacroDroid ``horario`` into a datetime.
+
+    Returns ``None`` when the field is absent. Raises ``ValueError`` when it
+    is present but not parseable (the caller maps that to a 422).
+    """
+    if not horario or not horario.strip():
+        return None
+    for fmt in _HORARIO_FORMATS:
+        try:
+            return datetime.strptime(horario.strip(), fmt).replace(
+                tzinfo=ZoneInfo("America/Sao_Paulo")
+            )
+        except ValueError:
+            continue
+    raise ValueError(f"Invalid horario format: {horario!r}")
+
+
+def _dedup_key(text: str, horario: str | None, descricao: str | None) -> str:
+    """Stable fingerprint of a notification for duplicate suppression.
+
+    MacroDroid can capture the same notification more than once; identical
+    (text, horario, descricao) → same hash → the second POST is ignored.
+    """
+    raw = "|".join([text.strip(), (horario or "").strip(), (descricao or "").strip()])
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
 async def _resolve_sender_user(
@@ -104,18 +173,109 @@ async def _resolve_sender_user(
     return None
 
 
+def _basic_username(encoded: str) -> str | None:
+    """Extract the username from a base64 Basic token for diagnostics.
+
+    Returns ``None`` when the token is not valid base64 (logging only — the
+    password is never logged)."""
+    try:
+        decoded = base64.b64decode(encoded.encode("ascii"), validate=True)
+    except (binascii.Error, ValueError, UnicodeDecodeError):
+        return None
+    username, _, _ = decoded.decode("utf-8", errors="replace").partition(":")
+    return username
+
+
+def _verify_basic_auth(encoded: str, settings) -> bool:
+    """Validate a base64 Basic Auth token (``user:password``) using
+    constant-time comparison against the configured secret.
+
+    Only the password is compared: MacroDroid commonly sends an empty or
+    arbitrary username (e.g. ``:password``), so the username is treated as a
+    convention rather than a credential — the security lives in the long
+    shared secret."""
+    try:
+        decoded = base64.b64decode(encoded.encode("ascii"), validate=True)
+    except (binascii.Error, ValueError, UnicodeDecodeError):
+        return False
+    _, _, password = decoded.decode("utf-8", errors="replace").partition(":")
+    return secrets.compare_digest(password, settings.macrodroid_webhook_secret)
+
+
 async def _verify_webhook_auth(
     authorization: str | None = Header(None),
 ) -> None:
-    """Verify Bearer token matches the configured webhook secret."""
+    """Verify webhook credentials against the configured shared secret.
+
+    Accepts HTTP Basic Auth (any username + the secret as password) and, for
+    backwards compatibility, the legacy ``Bearer <key>`` form. Invalid
+    credentials → 401. When no secret is configured the endpoint stays open
+    (dev convenience). Failures are logged (scheme + username, never the
+    password) so a misconfigured MacroDroid is easy to diagnose.
+    """
     settings = get_settings()
     if not settings.macrodroid_webhook_secret:
         return  # auth disabled
     if not authorization:
+        logger.warning("Webhook auth failed | missing Authorization header")
         raise HTTPException(status_code=401, detail="Missing Authorization header")
     scheme, _, token = authorization.partition(" ")
-    if scheme.lower() != "bearer" or token != settings.macrodroid_webhook_secret:
-        raise HTTPException(status_code=403, detail="Invalid webhook credentials")
+    scheme = scheme.lower()
+    if scheme == "basic":
+        if _verify_basic_auth(token, settings):
+            return
+        logger.warning(
+            "Webhook auth failed | scheme=basic username=%r",
+            _basic_username(token),
+        )
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid webhook credentials",
+            headers={"WWW-Authenticate": 'Basic realm="MacroDroid"'},
+        )
+    if scheme == "bearer":
+        if token == settings.macrodroid_webhook_secret:
+            return
+        logger.warning("Webhook auth failed | scheme=bearer")
+        raise HTTPException(status_code=401, detail="Invalid webhook credentials")
+    logger.warning("Webhook auth failed | scheme=%r", scheme)
+    raise HTTPException(status_code=401, detail="Unsupported authorization scheme")
+
+
+def _account_name_match(name: str):
+    """Match an account whose name equals the app name or contains it.
+
+    Existing accounts follow the `Instituição-Pessoa` convention (e.g.
+    "PicPay-Giovanni", "Mercado Pago-Débora"). A plain exact ``ilike`` never
+    matches those, so the webhook used to auto-create a phantom account
+    named exactly after the app. Matching by containment lets the webhook
+    route to the user's real, named account.
+    """
+    name = (name or "").strip()
+    if not name:
+        return func.false()
+    return or_(
+        func.lower(Account.name) == name.lower(),
+        Account.name.ilike(f"%{name}%"),
+    )
+
+
+def _account_name_order(banco_app: str, person_token: str = ""):
+    """Order candidate accounts: exact app-name match first, then the
+    sender's own account (name containing the person), then alphabetical."""
+    order = [(func.lower(Account.name) == banco_app.lower()).desc()]
+    if person_token:
+        order.append(func.lower(Account.name).contains(person_token).desc())
+    order.append(Account.name)
+    return order
+
+
+def _person_token(sender: str | None) -> str:
+    """First normalized word of the sender, used to prefer their own account."""
+    if not sender:
+        return ""
+    parts = _normalize_name(sender).split()
+    return parts[0] if parts else ""
 
 
 async def _resolve_account(
@@ -125,6 +285,7 @@ async def _resolve_account(
     movement_type: str = "",
     card_last4: str | None = None,
     user_id: uuid.UUID | None = None,
+    sender: str | None = None,
 ) -> Account:
     """Resolve the account a MacroDroid transaction should land on.
 
@@ -159,15 +320,19 @@ async def _resolve_account(
             return account
 
     # 2) Specific account for the movement type (checking / credit_card).
+    person_token = _person_token(sender)
     conditions = [
         Account.workspace_id == workspace_id,
         Account.type == tipo_conta,
-        Account.name.ilike(banco_app),
+        _account_name_match(banco_app),
     ]
     if user_id:
         conditions.append(Account.user_id == user_id)
     result = await session.execute(
-        select(Account).where(*conditions).order_by(Account.name).limit(1)
+        select(Account)
+        .where(*conditions)
+        .order_by(*_account_name_order(banco_app, person_token))
+        .limit(1)
     )
     account = result.scalar_one_or_none()
     if account:
@@ -176,12 +341,15 @@ async def _resolve_account(
     # 3) Fallback: default account of the app (first found by name, any type).
     conditions = [
         Account.workspace_id == workspace_id,
-        Account.name.ilike(banco_app),
+        _account_name_match(banco_app),
     ]
     if user_id:
         conditions.append(Account.user_id == user_id)
     result = await session.execute(
-        select(Account).where(*conditions).order_by(Account.name).limit(1)
+        select(Account)
+        .where(*conditions)
+        .order_by(*_account_name_order(banco_app, person_token))
+        .limit(1)
     )
     account = result.scalar_one_or_none()
     if account:
@@ -279,19 +447,27 @@ async def receive_macrodroid_notification(
     Expected payload from MacroDroid:
     ```json
     {
-        "text": "notification text",
+        "text": "Você recebeu um Pix de R$ 30,00",
         "sender": "Giovanni",
-        "app": "PicPay"
+        "descricao": "PIX ENVIADO DE NEON PARA PADARIA",
+        "horario": "10/08/2026 14:32:05"
     }
     ```
+
+    ``descricao`` (when present) is the authoritative display text: the app
+    and beneficiary are extracted from it and it wins over the fields parsed
+    from ``text``, which is only used for the amount. ``horario`` sets the
+    transaction date (server date when absent). Duplicate notifications are
+    ignored via a SHA-256 fingerprint of text + horario + descricao.
     """
     logger.info(
-        "MacroDroid notification received | app=%s sender=%s",
+        "MacroDroid notification received | app=%s sender=%s descricao=%r",
         payload.app,
         payload.sender,
+        payload.descricao,
     )
 
-    # Parse the notification
+    # Parse the notification (value + movement come from the raw text).
     parsed = parse_notification(payload.text, app=payload.app or "", sender=payload.sender or "")
     if parsed is None:
         _alert_admin(
@@ -308,8 +484,48 @@ async def receive_macrodroid_notification(
             detail="Could not parse notification text (no value found)",
         )
 
-    # User-filled establishment takes priority over the parser-extracted name.
-    parsed = _apply_estabelecimento_override(parsed, payload.estabelecimento)
+    # Validate the notification timestamp before doing any work.
+    try:
+        notif_dt = _parse_horario(payload.horario)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    if notif_dt:
+        tx_date = notif_dt.date()
+        time_str = notif_dt.strftime("%H:%M:%S")
+    else:
+        tx_date = datetime.now(ZoneInfo("America/Sao_Paulo")).date()
+        time_str = datetime.now(ZoneInfo("America/Sao_Paulo")).strftime("%H:%M:%S")
+
+    # The MacroDroid-built `descricao` is authoritative: it carries the app,
+    # the beneficiary and the movement in a readable form ("who paid whom").
+    # `text` remains the only source for the amount.
+    descricao_override = _parse_descricao(payload.descricao)
+    if descricao_override:
+        movement, app_from_desc, beneficiary = descricao_override
+        banco_app = app_from_desc or parsed.banco_app
+        beneficiary_missing = not beneficiary
+        parsed = replace(
+            parsed,
+            banco_app=banco_app,
+            movement_type=movement,
+            tipo=MOVEMENT_TO_TIPO[movement],
+            origem_destino=beneficiary or DESTINATARIO_NAO_INFORMADO,
+            descricao=payload.descricao.strip(),
+            # A well-formed `descricao` is authoritative (no review needed);
+            # a blank beneficiary falls back to the placeholder + review.
+            precisa_revisao=beneficiary_missing,
+        )
+        if beneficiary_missing:
+            logger.warning(
+                "MacroDroid descricao sem destinatário | app=%s | descricao=%r",
+                banco_app,
+                payload.descricao,
+            )
+
+    # Duplicate fingerprint (MacroDroid may deliver the same notification more
+    # than once). Stored on the row and checked before insert.
+    dedup_hash = _dedup_key(payload.text, payload.horario, payload.descricao)
+    external_key = f"macrodroid:{dedup_hash}"
 
     # Resolve workspace: payload > env var > first non-archived
     settings = get_settings()
@@ -346,6 +562,23 @@ async def receive_macrodroid_notification(
     if not workspace:
         raise HTTPException(status_code=404, detail="No workspace found")
 
+    # Idempotency: if this exact notification already produced a transaction,
+    # return the existing one instead of creating a duplicate.
+    from app.models.transaction import Transaction
+
+    existing_result = await session.execute(
+        select(Transaction.id).where(
+            Transaction.workspace_id == workspace.id,
+            Transaction.external_id == external_key,
+        )
+    )
+    existing_id = existing_result.scalar_one_or_none()
+    if existing_id:
+        logger.info(
+            "MacroDroid duplicate ignored | id=%s hash=%s", existing_id, dedup_hash
+        )
+        return {"ok": True, "transaction_id": str(existing_id), "duplicate": True}
+
     # Get the workspace owner (created_by_user_id)
     owner_id = workspace.created_by_user_id
     if not owner_id:
@@ -365,10 +598,10 @@ async def receive_macrodroid_notification(
     sender_user = await _resolve_sender_user(session, workspace.id, payload.sender)
     account_user_id = sender_user.id if sender_user else owner_id
 
-    # Resolve (or auto-create) the user-filled category.
-    category, category_name = await _resolve_category(
-        session, workspace.id, owner_id, payload.categoria
-    )
+    # Category is intentionally left unset — the user categorizes it later in
+    # the UI. The payload's `categoria` field is ignored for now.
+    category = None
+    category_name = None
 
     # Resolve account — find or create, preferring the sender's own account.
     account = await _resolve_account(
@@ -378,6 +611,7 @@ async def receive_macrodroid_notification(
         movement_type=parsed.movement_type or "",
         card_last4=parsed.cartao_final,
         user_id=account_user_id,
+        sender=payload.sender,
     )
     if not account.id:
         account.id = uuid.uuid4()
@@ -391,24 +625,15 @@ async def receive_macrodroid_notification(
     if parsed.precisa_revisao and payload.sender:
         descricao = f"{descricao} ({payload.sender})"
 
-    # Notes: translated prefix + full local timestamp so the hour is visible.
-    notes = f"{NOTES_FIXO} {datetime.now(ZoneInfo('America/Sao_Paulo')).strftime('%d/%m/%Y %H:%M:%S')}"
+    # Notes: translated prefix + notification timestamp so the hour is visible.
+    notes = f"{NOTES_FIXO} {tx_date.strftime('%d/%m/%Y')} {time_str}"
 
-    # Payee: user-filled establishment or the parser-extracted name. Real names
-    # become a Payee entity so they show up in the merchants list; placeholders
-    # stay unset.
-    payee = (
-        parsed.origem_destino if parsed.origem_destino not in _PAYEE_PLACEHOLDERS else None
-    )
+    # Beneficiary is intentionally left unset — the user fills it later in the
+    # UI. The parser-extracted name/establishment stays only in the description.
+    payee = None
     payee_id = None
-    if payee:
-        payee_entity = await get_or_create_payee(
-            session, owner_id, payee, workspace_id=workspace.id
-        )
-        payee_id = payee_entity.id
 
     # Create the transaction
-    from app.models.transaction import Transaction
     from app.services.credit_card_service import apply_effective_date
 
     transaction = Transaction(
@@ -419,7 +644,7 @@ async def receive_macrodroid_notification(
         description=descricao,
         amount=parsed.valor,
         currency="BRL",
-        date=date.today(),
+        date=tx_date,
         type=parsed.tipo,
         source="manual",
         status="posted",
@@ -431,6 +656,7 @@ async def receive_macrodroid_notification(
         movement_type=parsed.movement_type or None,
         card_last4=parsed.cartao_final,
         needs_review=parsed.precisa_revisao,
+        external_id=external_key,
         raw_data={
             "origem_destino": parsed.origem_destino,
             "movement_type": parsed.movement_type or None,
@@ -439,6 +665,9 @@ async def receive_macrodroid_notification(
             "estabelecimento": payload.estabelecimento,
             "categoria": payload.categoria,
             "notificacao_original": payload.text,
+            "descricao": payload.descricao,
+            "horario": payload.horario,
+            "dedup_hash": dedup_hash,
         },
     )
     apply_effective_date(transaction, account)

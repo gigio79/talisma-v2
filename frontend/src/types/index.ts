@@ -220,6 +220,11 @@ export interface Transaction {
   // available, cycle math otherwise). Setting it forces the tx into the
   // bill whose due_date matches.
   effective_bill_date: string | null
+  // Effective date of the tx: equals `effective_bill_date` when set,
+  // otherwise the computed bill-cycle date (CC) or `date` (other accounts).
+  // Mirrors the backend's `reporting_date_col` — use this for bucketing
+  // and display.
+  effective_date: string
   // The recurring bill this transaction fulfills, if any (issue #116).
   recurring_transaction_id?: string | null
   splits: TransactionSplit[]
@@ -756,4 +761,46 @@ export interface ReportResponse {
   meta: ReportMeta
   composition: ReportCompositionItem[]
   category_trend: CategoryTrendItem[]
+}
+
+export type NotificationAlertType = '7_DAYS' | '3_DAYS' | '1_DAY' | 'DUE_DATE'
+export type NotificationStatus = 'unread' | 'read' | 'dismissed'
+
+export interface Notification {
+  id: string
+  workspace_id: string
+  account_id: string
+  target_type: 'transaction' | 'bill' | 'recurring'
+  target_id: string
+  alert_type: NotificationAlertType
+  status: NotificationStatus
+  description: string | null
+  amount: number | null
+  currency: string | null
+  type: 'debit' | 'credit' | null
+  account_name: string | null
+  due_date: string
+  created_at: string
+  sent_at: string | null
+}
+
+export interface UnreadCount {
+  count: number
+}
+
+export interface PushVapidKey {
+  enabled: boolean
+  public_key: string
+}
+
+export interface PushSubscriptionInfo {
+  id: string
+  endpoint: string
+  device_label: string | null
+  created_at: string
+}
+
+export interface PushTestResult {
+  sent: number
+  pruned: number
 }

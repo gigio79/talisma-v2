@@ -100,6 +100,12 @@ class TransactionRead(TransactionBase):
     source: str
     status: str = "posted"
     due_date: Optional[_Date] = None
+    # Effective date for cash-flow reporting: the invoice due date for
+    # credit-card purchases (respects the manual `effective_bill_date`
+    # override), the raw `date` for every other account type. Exposed so
+    # the UI can show the vencimento in monthly listings while keeping the
+    # purchase `date` as secondary info.
+    effective_date: _Date
     payee: Optional[str] = None
     payee_id: Optional[uuid.UUID] = None
     payee_name: Optional[str] = None
@@ -116,6 +122,9 @@ class TransactionRead(TransactionBase):
     bill_id: Optional[uuid.UUID] = None
     effective_bill_date: Optional[_Date] = None
     recurring_transaction_id: Optional[uuid.UUID] = None
+    # Id of the real transaction this row absorbed during a reconciliation
+    # (the absorbed row was deleted). Null when never reconciled.
+    reconciled_with_id: Optional[uuid.UUID] = None
     splits: list[TransactionSplitRead] = []
     # Shared-transaction view fields. Set per-request when the viewer
     # is a linked member of one of this transaction's splits but not
@@ -168,6 +177,19 @@ class TransferCreate(BaseModel):
 
 class LinkTransferRequest(BaseModel):
     transaction_ids: list[uuid.UUID]
+
+
+class ReconcileTransactionsRequest(BaseModel):
+    """Reconcile a real payment with the scheduled ("a pagar") row that
+    represents the same planned expense. The scheduled row survives and
+    absorbs the real row's amount/date/account/attachments; the real row is
+    deleted. Exactly two ids, one `scheduled` and one `posted`."""
+    transaction_ids: list[uuid.UUID]
+
+
+class ReconcileResponse(BaseModel):
+    survivor: TransactionRead
+    deleted_id: uuid.UUID
 
 
 class CreateCounterpartRequest(BaseModel):

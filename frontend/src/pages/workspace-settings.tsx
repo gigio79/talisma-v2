@@ -36,8 +36,11 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import { AlertTriangle, Archive, Plus, Save, Trash2, Users } from 'lucide-react'
+import { AlertTriangle, Archive, BellRing, Plus, Save, Send, Trash2, Users } from 'lucide-react'
 import type { WorkspaceMember, WorkspaceRole } from '@/types'
+import { usePushNotifications } from '@/hooks/use-push-notifications'
+import { push as pushApi } from '@/lib/api'
+import { Switch } from '@/components/ui/switch'
 
 function labelForRole(role: WorkspaceRole, t: (key: string) => string): string {
   return {
@@ -118,6 +121,9 @@ export default function WorkspaceSettingsPage() {
     queryFn: () => (current ? workspacesApi.stats(current.id) : Promise.resolve({ members: 0, accounts: 0, transactions: 0 })),
     enabled: !!current,
   })
+
+  const pushNotif = usePushNotifications()
+  const [pushBusy, setPushBusy] = useState(false)
 
   const updateMutation = useMutation({
     mutationFn: () => {
@@ -505,6 +511,94 @@ export default function WorkspaceSettingsPage() {
               )
             })}
           </ul>
+        )}
+      </section>
+
+      {/* Push notifications — mobile Web Push (VAPID) opt-in */}
+      <section className="space-y-4 rounded-xl border bg-card p-6">
+        <div className="flex items-center gap-2">
+          <BellRing className="h-4 w-4 text-muted-foreground" />
+          <h2 className="text-base font-semibold">{t('notification.pushTitle')}</h2>
+        </div>
+        {!pushNotif.supported ? (
+          <p className="text-sm text-muted-foreground">
+            {t('notification.pushUnavailable')}
+          </p>
+        ) : (
+          <div className="space-y-4">
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <p className="text-sm font-medium">{t('notification.pushToggle')}</p>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  {t('notification.pushToggleHint')}
+                </p>
+              </div>
+              <Switch
+                id="push-enabled"
+                checked={pushNotif.enabled}
+                disabled={pushBusy || pushNotif.busy || pushNotif.status === 'denied'}
+                onCheckedChange={async (on) => {
+                  setPushBusy(true)
+                  try {
+                    if (on) {
+                      const ok = await pushNotif.enable()
+                      if (ok) toast.success(t('notification.pushEnabled'))
+                      else if (pushNotif.lastError)
+                        toast.error(pushNotif.lastError)
+                      else toast.error(t('notification.pushActivateError'))
+                    } else {
+                      await pushNotif.disable()
+                      toast.success(t('notification.pushDisabled'))
+                    }
+                  } catch (err) {
+                    toast.error(
+                      err instanceof Error
+                        ? err.message
+                        : t('notification.pushActivateError'),
+                    )
+                  } finally {
+                    setPushBusy(false)
+                  }
+                }}
+              />
+            </div>
+            {pushNotif.status === 'denied' && (
+              <p className="text-xs text-amber-600 dark:text-amber-400">
+                {t('notification.pushPermissionBlocked')}
+              </p>
+            )}
+            {pushNotif.status === 'default' && (
+              <p className="text-xs text-amber-600 dark:text-amber-400">
+                {t('notification.pushPermDefault')}
+              </p>
+            )}
+            <div className="flex items-center gap-3">
+              <Button
+                variant="outline"
+                size="sm"
+                className="rounded-lg"
+                disabled={!pushNotif.enabled || pushBusy}
+                onClick={async () => {
+                  setPushBusy(true)
+                  try {
+                    const result = await pushApi.sendTest()
+                    if (result.sent > 0) toast.success(t('notification.pushTestSent'))
+                    else toast.error(t('notification.pushTestNoDevice'))
+                  } catch {
+                    toast.error(t('common.error'))
+                  } finally {
+                    setPushBusy(false)
+                  }
+                }}
+              >
+                <Send className="mr-2 h-3.5 w-3.5" />
+                {t('notification.pushTest')}
+              </Button>
+              <span className="text-xs text-muted-foreground">
+                {t('notification.pushTestHint')}
+              </span>
+            </div>
+          </div>
         )}
       </section>
 

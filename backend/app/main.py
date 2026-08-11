@@ -16,6 +16,7 @@ from app.api.connections import router as connections_router
 from app.api.custom_auth import router as custom_auth_router
 from app.api.dashboard import router as dashboard_router
 from app.api.import_logs import router as import_logs_router
+from app.api.notifications import router as notifications_router
 from app.api.oidc_auth import router as oidc_auth_router
 from app.api.passkeys import router as passkeys_router
 from app.api.import_transactions import router as import_router
@@ -161,6 +162,7 @@ app.include_router(rules_router)
 app.include_router(transactions_router)
 app.include_router(import_router)
 app.include_router(import_logs_router)
+app.include_router(notifications_router)
 app.include_router(accounts_router)
 app.include_router(connections_router)
 app.include_router(recurring_router)

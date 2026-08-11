@@ -635,6 +635,21 @@ async def get_transaction(
     return transaction
 
 
+def _derive_status(transaction: Transaction) -> str:
+    """Default lifecycle status for a new/edited manual transaction.
+
+    A debit whose cash-flow date — `effective_date` (the invoice due date
+    for credit-card purchases, the raw `date` otherwise) — is still in the
+    future has not moved money yet: it is "a pagar" (scheduled). Anything
+    else is posted. Mirrors the documented contract on
+    TransactionCreate.status ("debit dated in the future -> scheduled").
+    """
+    if transaction.type != "debit":
+        return "posted"
+    effective = transaction.effective_date or transaction.date
+    return "scheduled" if effective > date.today() else "posted"
+
+
 async def create_transaction(
     session: AsyncSession,
     workspace_id: uuid.UUID,
@@ -678,9 +693,22 @@ async def create_transaction(
         installment_total_amount=data.installment_total_amount,
         installment_purchase_date=data.installment_purchase_date,
     )
+    # Persist the manual bill-cycle override and the original vencimento so
+    # the create path stores what the form sent (previously both were
+    # silently dropped, so a future "Data efetiva da fatura" never applied).
+    if data.effective_bill_date is not None:
+        transaction.effective_bill_date = data.effective_bill_date
+    if data.due_date is not None:
+        transaction.due_date = data.due_date
     apply_effective_date(transaction, account)
+    transaction.status = data.status or _derive_status(transaction)
     session.add(transaction)
     await session.flush()  # get ID without committing
+
+    # Link the manual override to an existing bill whose due_date matches
+    # (same behavior the update path applies via _resync_bill_link_from_override).
+    if account.type == "credit_card" and transaction.effective_bill_date is not None:
+        await _resync_bill_link_from_override(session, transaction, account)
 
     # Apply rules only if no explicit category provided
     if not data.category_id:
@@ -773,6 +801,7 @@ async def create_installment_plan(
             if data.effective_bill_date:
                 tx.effective_bill_date = data.effective_bill_date
             apply_effective_date(tx, account)
+        tx.status = _derive_status(tx)
         session.add(tx)
         transactions.append(tx)
 
@@ -1127,6 +1156,245 @@ async def create_transfer_counterpart(
     return debit_tx, credit_tx
 
 
+async def _merge_transaction_notes(existing: Optional[str], incoming: Optional[str]) -> Optional[str]:
+    """Merge two notes fields, keeping hashtags readable on both sides."""
+    existing = (existing or "").strip()
+    incoming = (incoming or "").strip()
+    if not existing:
+        return incoming or None
+    if not incoming:
+        return existing or None
+    return f"{existing}\n{incoming}"
+
+
+async def reconcile_transactions(
+    session: AsyncSession,
+    workspace_id: uuid.UUID,
+    user_id: uuid.UUID,
+    transaction_ids: list[uuid.UUID],
+) -> tuple[Transaction, uuid.UUID]:
+    """Reconcile a real payment with the scheduled ("a pagar") row for the
+    same planned expense (e.g. MacroDroid posted the Pix, but the scheduled
+    row is still "A Pagar" — two rows, double-counting).
+
+    The scheduled row *survives* and absorbs the real row's amount, currency,
+    account, date and attachments — preserving the user's meaningful
+    description and the original vencimento (due_date). The real row is
+    deleted. Because balances/P&L derive from `status` (scheduled rows don't
+    count until posted), the net effect on balances is neutral.
+
+    Returns (survivor, deleted_id).
+    """
+    if len(transaction_ids) != 2:
+        raise ValueError("Exactly two transactions are required")
+    if transaction_ids[0] == transaction_ids[1]:
+        raise ValueError("Cannot reconcile a transaction with itself")
+
+    txns: list[Transaction] = []
+    for tx_id in transaction_ids:
+        tx = await get_transaction(session, tx_id, workspace_id)
+        if tx is None:
+            raise ValueError("Transaction not found")
+        txns.append(tx)
+
+    scheduled = [tx for tx in txns if tx.status == "scheduled"]
+    realized = [tx for tx in txns if tx.status in ("posted", "pending")]
+    if len(scheduled) != 1 or len(realized) != 1:
+        raise ValueError(
+            "To reconcile, select one 'A Pagar' (scheduled) transaction and "
+            "one real (Lançada) transaction"
+        )
+    survivor = scheduled[0]
+    absorbed = realized[0]
+
+    for tx in txns:
+        if tx.type != "debit":
+            raise ValueError("Only debit (expense) transactions can be reconciled")
+        if tx.transfer_pair_id is not None:
+            raise ValueError("A transfer-leg transaction cannot be reconciled")
+        if tx.reconciled_with_id is not None:
+            raise ValueError("Transaction has already been reconciled")
+
+    # Absorb the real payment into the scheduled row.
+    survivor.amount = absorbed.amount
+    survivor.currency = absorbed.currency
+    survivor.account_id = absorbed.account_id
+    survivor.date = absorbed.date
+    survivor.status = "posted"
+    survivor.external_id = absorbed.external_id
+    survivor.raw_data = absorbed.raw_data
+    survivor.import_id = absorbed.import_id
+    if absorbed.source:
+        survivor.source = absorbed.source
+    survivor.movement_type = absorbed.movement_type
+    survivor.card_last4 = absorbed.card_last4
+    survivor.source_app = absorbed.source_app
+    survivor.sender = absorbed.sender
+    survivor.needs_review = absorbed.needs_review
+    # Credit-card provenance: carry the bill link so the survivor lands in
+    # the same cycle the real charge belonged to.
+    survivor.bill_id = absorbed.bill_id
+    survivor.effective_bill_date = absorbed.effective_bill_date
+    # Installment metadata, when the real charge carried it.
+    survivor.installment_number = absorbed.installment_number
+    survivor.total_installments = absorbed.total_installments
+    survivor.installment_total_amount = absorbed.installment_total_amount
+    survivor.installment_purchase_date = absorbed.installment_purchase_date
+
+    # Description stays the user's meaningful one; the bank/provider text and
+    # any MacroDroid notes are appended to notes so nothing is lost.
+    survivor.notes = await _merge_transaction_notes(survivor.notes, absorbed.notes)
+    # Payee: prefer the survivor's, fall back to the real row's.
+    if not survivor.payee_id and absorbed.payee_id:
+        survivor.payee_id = absorbed.payee_id
+    if not survivor.payee and absorbed.payee:
+        survivor.payee = absorbed.payee
+    # Category: keep the scheduled row's user-picked category, falling back
+    # to the real row's when unset.
+    if not survivor.category_id and absorbed.category_id:
+        survivor.category_id = absorbed.category_id
+
+    # Splits: the scheduled row's allocation wins; only adopt the real row's
+    # splits when the survivor has none. Done via the ORM (splits are eagerly
+    # loaded) so cascade deletion of `absorbed` doesn't nuke the moved rows.
+    if not survivor.splits and absorbed.splits:
+        for sp in absorbed.splits:
+            sp.transaction_id = survivor.id
+        absorbed.splits.clear()
+
+    # Carry the exact FX conversion from the real payment so the primary
+    # amount stays identical (same amount/currency/date as absorbed).
+    survivor.amount_primary = absorbed.amount_primary
+    survivor.fx_rate_used = absorbed.fx_rate_used
+
+    new_account = await session.get(Account, survivor.account_id)
+    apply_effective_date(survivor, new_account)
+
+    # Move attachments (the Pix comprovante) to the survivor before deletion.
+    await session.execute(
+        update(TransactionAttachment)
+        .where(TransactionAttachment.transaction_id == absorbed.id)
+        .values(transaction_id=survivor.id)
+    )
+
+    # If the scheduled row materialized from a recurring bill, advance the
+    # bill so generate_pending never recreates it as a duplicate.
+    if survivor.recurring_transaction_id is not None:
+        from app.services import recurring_match_service
+
+        recurring = await session.get(
+            recurring_match_service.RecurringTransaction,
+            survivor.recurring_transaction_id,
+        )
+        if recurring is not None:
+            recurring_match_service.advance_past(recurring, absorbed.date)
+
+    survivor.reconciled_with_id = absorbed.id
+    await session.flush()
+
+    deleted_id = absorbed.id
+    await delete_transaction(session, deleted_id, workspace_id)
+
+    await session.refresh(survivor, ["category", "splits"])
+    return survivor, deleted_id
+
+
+async def get_reconcile_candidates(
+    session: AsyncSession,
+    workspace_id: uuid.UUID,
+    transaction_id: uuid.UUID,
+    limit: int = 10,
+    window_days: int = 10,
+    match_pct: float = 10.0,
+) -> list[Transaction]:
+    """Return ranked scheduled ("a pagar") candidates a real transaction
+    could be reconciled with.
+
+    The anchor is a real (posted/pending) debit; candidates are scheduled
+    debits in the workspace within ``window_days`` of the anchor's date.
+    Ranked by amount proximity first (the payer's planned value usually
+    differs from the real charge by a few cents — Pix discount), then
+    description token-similarity. Candidates are kept when they are within
+    ``match_pct`` of the anchor amount OR share similar wording.
+    """
+    from datetime import timedelta
+    from decimal import Decimal
+
+    from app.services.recurring_match_service import _description_similarity
+
+    anchor = await get_transaction(session, transaction_id, workspace_id)
+    if not anchor:
+        return []
+    if anchor.transfer_pair_id is not None or anchor.reconciled_with_id is not None:
+        return []
+    if anchor.type != "debit":
+        return []
+
+    from_date = anchor.date - timedelta(days=window_days)
+    to_date = anchor.date + timedelta(days=window_days)
+
+    result = await session.execute(
+        select(Transaction)
+        .where(
+            Transaction.workspace_id == workspace_id,
+            Transaction.id != anchor.id,
+            Transaction.type == "debit",
+            Transaction.status == "scheduled",
+            Transaction.transfer_pair_id.is_(None),
+            Transaction.reconciled_with_id.is_(None),
+            Transaction.source != "opening_balance",
+            Transaction.date >= from_date,
+            Transaction.date <= to_date,
+        )
+        .options(
+            selectinload(Transaction.category),
+            selectinload(Transaction.account),
+            selectinload(Transaction.payee_entity),
+            selectinload(Transaction.splits),
+        )
+    )
+    candidates = list(result.scalars().all())
+
+    anchor_amount = Decimal(str(anchor.amount_primary or anchor.amount)).copy_abs()
+    tolerance = Decimal(str(match_pct)) / Decimal("100")
+
+    def score(tx: Transaction):
+        cand_amount = Decimal(str(tx.amount_primary or tx.amount)).copy_abs()
+        if anchor_amount:
+            amount_ratio = (cand_amount - anchor_amount).copy_abs() / anchor_amount
+        else:
+            amount_ratio = Decimal("0") if cand_amount == 0 else Decimal("1")
+        similarity = _description_similarity(tx.description, anchor.description)
+        date_diff = abs((tx.date - anchor.date).days)
+        return (amount_ratio, -Decimal(str(similarity)), date_diff)
+
+    scored = [(tx, *score(tx)) for tx in candidates]
+    filtered = [
+        (tx, amount_ratio, neg_sim, date_diff)
+        for tx, amount_ratio, neg_sim, date_diff in scored
+        if amount_ratio <= tolerance or -neg_sim >= 0.6
+    ]
+    filtered.sort(key=lambda entry: (entry[1], entry[2], entry[3]))
+    candidates = [entry[0] for entry in filtered[:limit]]
+
+    if candidates:
+        tx_ids = [tx.id for tx in candidates]
+        count_rows = await session.execute(
+            select(
+                TransactionAttachment.transaction_id,
+                func.count(TransactionAttachment.id),
+            )
+            .where(TransactionAttachment.transaction_id.in_(tx_ids))
+            .group_by(TransactionAttachment.transaction_id)
+        )
+        counts = dict(count_rows.all())
+        for tx in candidates:
+            tx.attachment_count = counts.get(tx.id, 0)
+            tx.payee_name = tx.payee_entity.name if tx.payee_entity else None
+
+    return candidates
+
+
 async def _resync_bill_link_from_override(
     session: AsyncSession, transaction: Transaction, account: Optional[Account]
 ) -> None:
@@ -1256,6 +1524,13 @@ async def update_transaction(
         if "effective_bill_date" in update_data:
             await _resync_bill_link_from_override(session, transaction, account_for_tx)
         apply_effective_date(transaction, account_for_tx)
+        # Re-derive the lifecycle status when the cash-flow date changed and
+        # the caller didn't explicitly set one (e.g. the "Pagar"/"Desfazer"
+        # actions always pass an explicit status and stay untouched). Editing
+        # a vencimento to a future date flips a CC purchase back to
+        # "a pagar" (scheduled), matching the create-path contract.
+        if "status" not in update_data:
+            transaction.status = _derive_status(transaction)
 
     # Cascade changes to paired transfer transaction
     cascade_fields = {"amount", "date", "description", "notes"}

@@ -323,7 +323,7 @@ export function LinkTransferDialog({
             {t('transactions.linkTransferDescription')}
           </p>
 
-          <div className="grid grid-cols-[1fr_auto_1fr] items-stretch gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-[1fr_auto_1fr] items-stretch gap-3">
             <CounterpartCard
               label={t('transactions.linkTransferFrom')}
               description={effectiveDebit.description}
@@ -335,8 +335,8 @@ export function LinkTransferDialog({
               locale={locale}
               dateLocale={dateLocale}
             />
-            <div className="flex items-center">
-              <ArrowRight size={18} className="text-muted-foreground" />
+            <div className="flex items-center justify-center sm:justify-start">
+              <ArrowRight size={18} className="text-muted-foreground rotate-90 sm:rotate-0" />
             </div>
             <CounterpartCard
               label={t('transactions.linkTransferTo')}

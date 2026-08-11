@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
 import {
@@ -23,7 +24,13 @@ import { Check, ChevronsUpDown, Layers, Settings2, X } from 'lucide-react'
  * Hidden entirely until the user has at least one collection, so it never
  * clutters the UI for people who don't use the feature.
  */
-export function CollectionSelector({ variant = 'sidebar' }: { variant?: 'sidebar' | 'header' }) {
+export function CollectionSelector({
+  variant = 'sidebar',
+  right,
+}: {
+  variant?: 'sidebar' | 'header'
+  right?: ReactNode
+}) {
   const { t } = useTranslation()
   const nav = useNavigate()
   const { collections, activeCollection, setActiveCollectionId } = useCollectionFilter()
@@ -131,6 +138,7 @@ export function CollectionSelector({ variant = 'sidebar' }: { variant?: 'sidebar
             {t('collections.clearFilter')}
           </button>
         )}
+        {right && <div className="ml-auto flex items-center gap-1">{right}</div>}
       </div>
     </div>
   )

@@ -1,5 +1,5 @@
 import uuid
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 
 import pytest
@@ -235,6 +235,29 @@ async def test_create_installment_plan_with_effective_bill_date(
     for tx in txns:
         assert tx.effective_bill_date == date(2026, 4, 10)
         assert tx.effective_date == date(2026, 4, 10)
+
+
+@pytest.mark.asyncio
+async def test_create_installment_plan_future_vencimento_scheduled(
+    session: AsyncSession, test_user, test_workspace, test_categories, cc_account_in_workspace
+):
+    """Installments falling on a future vencimento default to scheduled."""
+    future = date.today() + timedelta(days=30)
+    data = InstallmentPlanCreate(
+        account_id=cc_account_in_workspace.id,
+        description="TV parcelada",
+        total_amount=Decimal("3000.00"),
+        num_installments=3,
+        purchase_date=date.today(),
+        effective_bill_date=future,
+    )
+    txns = await create_installment_plan(session, test_workspace.id, test_user.id, data)
+
+    assert len(txns) == 3
+    for tx in txns:
+        assert tx.effective_bill_date == future
+        assert tx.effective_date == future
+        assert tx.status == "scheduled"
 
 
 # ---------------------------------------------------------------------------

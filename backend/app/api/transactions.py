@@ -15,7 +15,7 @@ from app.core.workspace_context import (
     current_workspace,
     current_writable_workspace,
 )
-from app.schemas.transaction import BulkAddToGroupRequest, BulkCategorizeRequest, BulkTagsRequest, CreateCounterpartRequest, InstallmentPlanCreate, LinkTransferRequest, TransactionCreate, TransactionRead, TransactionUpdate, TransferCreate, TransferRead
+from app.schemas.transaction import BulkAddToGroupRequest, BulkCategorizeRequest, BulkTagsRequest, CreateCounterpartRequest, InstallmentPlanCreate, LinkTransferRequest, ReconcileResponse, ReconcileTransactionsRequest, TransactionCreate, TransactionRead, TransactionUpdate, TransferCreate, TransferRead
 from app.services import transaction_service
 from app.services.admin_service import get_credit_card_accounting_mode
 from app.services.recurring_transaction_service import generate_pending
@@ -312,6 +312,36 @@ async def link_transfer(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
 
+@router.post("/reconcile", response_model=ReconcileResponse)
+async def reconcile_transactions(
+    data: ReconcileTransactionsRequest,
+    ctx: WorkspaceContext = Depends(current_writable_workspace),
+    session: AsyncSession = Depends(get_async_session),
+):
+    """Reconcile a real payment with its scheduled ("A Pagar") row.
+
+    The scheduled row survives and absorbs the real row's amount, currency,
+    account, date and attachments; the real row is deleted. Both must be
+    debit transactions; one `scheduled` (A Pagar), one `posted`/`pending`
+    (Lançada). Returns the surviving row plus the deleted row's id.
+    """
+    try:
+        survivor, deleted_id = await transaction_service.reconcile_transactions(
+            session, ctx.workspace.id, ctx.user_id, data.transaction_ids
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    survivor_full = await transaction_service.get_transaction(session, survivor.id, ctx.workspace.id)
+    primary_currency = ctx.user.primary_currency
+    return ReconcileResponse(
+        survivor=_tag_fx_fallback(
+            TransactionRead.model_validate(survivor_full, from_attributes=True),
+            primary_currency,
+        ),
+        deleted_id=deleted_id,
+    )
+
+
 @router.post("/{transaction_id}/create-counterpart", response_model=TransferRead, status_code=status.HTTP_201_CREATED)
 async def create_counterpart(
     transaction_id: uuid.UUID,
@@ -351,6 +381,35 @@ async def get_transfer_candidates(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Transaction not found")
     candidates = await transaction_service.get_transfer_candidates(
         session, ctx.workspace.id, transaction_id, limit=limit, window_days=window_days
+    )
+    primary_currency = ctx.user.primary_currency
+    return [
+        _tag_fx_fallback(TransactionRead.model_validate(tx, from_attributes=True), primary_currency)
+        for tx in candidates
+    ]
+
+
+@router.get("/{transaction_id}/reconcile-candidates", response_model=list[TransactionRead])
+async def get_reconcile_candidates(
+    transaction_id: uuid.UUID,
+    limit: int = Query(10, ge=1, le=50),
+    window_days: int = Query(10, ge=1, le=365),
+    match_pct: float = Query(10.0, ge=0, le=100),
+    ctx: WorkspaceContext = Depends(current_workspace),
+    session: AsyncSession = Depends(get_async_session),
+):
+    """Return ranked scheduled ("A Pagar") candidates a real transaction
+    could be reconciled with (amount proximity first, then wording)."""
+    anchor = await transaction_service.get_transaction(session, transaction_id, ctx.workspace.id)
+    if not anchor:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Transaction not found")
+    candidates = await transaction_service.get_reconcile_candidates(
+        session,
+        ctx.workspace.id,
+        transaction_id,
+        limit=limit,
+        window_days=window_days,
+        match_pct=match_pct,
     )
     primary_currency = ctx.user.primary_currency
     return [

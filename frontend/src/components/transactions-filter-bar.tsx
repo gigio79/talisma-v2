@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { getAccountName } from '@/lib/account-utils'
 import { useTranslation } from 'react-i18next'
 import { useDisplayLocale, useDateLocale } from '@/hooks/use-display-locale'
@@ -7,6 +7,7 @@ import {
   ArrowUpDown,
   Calendar as CalendarIcon,
   Check,
+  ChevronLeft,
   ChevronRight,
   Coins,
   ListFilter,
@@ -40,6 +41,7 @@ import { Calendar } from '@/components/ui/calendar'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { resolveDateFnsLocale } from '@/lib/date-fns-locale'
+import { monthFromRange } from '@/lib/month-utils'
 import { CategoryFilterContent } from '@/components/category-filter-content'
 import type { Account, Category, CategoryGroup, Group, Payee } from '@/types'
 
@@ -151,6 +153,7 @@ export function TransactionsFilterBar({
       setAccountSubOpen(false)
       setCategorySubOpen(false)
       setAmountSubOpen(false)
+      setActivePanel(null)
       keepAccountSubOpenRef.current = false
       keepCategorySubOpenRef.current = false
     }
@@ -178,6 +181,12 @@ export function TransactionsFilterBar({
     [groups, filterGroupId],
   )
 
+  // A full calendar month (01 → last day) is the page's default view, not an
+  // active filter, so it never counts toward the filter UI (chip / "Limpar
+  // filtros" / highlighted button). Only custom ranges count as a date filter.
+  const isFullMonthRange =
+    !!filterFrom && !!filterTo && monthFromRange(filterFrom, filterTo) !== null
+
   const hasAnyFilter =
     filterAccountIds.length > 0 ||
     filterCategoryIds.length > 0 ||
@@ -185,8 +194,7 @@ export function TransactionsFilterBar({
     !!filterPayee ||
     !!filterGroupId ||
     !!filterType ||
-    !!filterFrom ||
-    !!filterTo ||
+    (!isFullMonthRange && (!!filterFrom || !!filterTo)) ||
     !!filterMinAmount ||
     !!filterMaxAmount ||
     searchInput.trim().length > 0
@@ -200,6 +208,7 @@ export function TransactionsFilterBar({
 
   const dateLabel = useMemo(() => {
     if (!filterFrom && !filterTo) return null
+    if (isFullMonthRange) return null
     const fmt = (iso: string) =>
       new Date(iso + 'T00:00:00').toLocaleDateString(dateLocale, {
         day: '2-digit',
@@ -208,7 +217,7 @@ export function TransactionsFilterBar({
     if (filterFrom && filterTo) return `${fmt(filterFrom)} — ${fmt(filterTo)}`
     if (filterFrom) return `≥ ${fmt(filterFrom)}`
     return `≤ ${fmt(filterTo)}`
-  }, [filterFrom, filterTo, dateLocale])
+  }, [filterFrom, filterTo, isFullMonthRange, dateLocale])
 
   const amountLabel = useMemo(() => {
     if (!filterMinAmount && !filterMaxAmount) return null
@@ -321,6 +330,351 @@ export function TransactionsFilterBar({
     return ''
   })()
 
+  // Below `sm` the Radix cascading submenus open sideways and clip off the left
+  // edge of narrow screens (flip has nowhere to go when the menu hugs the right
+  // edge), so we switch to an in-menu drill-down: a main list of filter sections
+  // and, after tapping one, that section's options rendered inline with a back
+  // button. On `sm+` the classic submenus below are kept.
+  const [isMobile, setIsMobile] = useState(() =>
+    typeof window !== 'undefined' && window.matchMedia('(max-width: 639px)').matches,
+  )
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 639px)')
+    const handler = (e: MediaQueryListEvent) => setIsMobile(e.matches)
+    mq.addEventListener('change', handler)
+    return () => mq.removeEventListener('change', handler)
+  }, [])
+
+  type FilterPanelKey = 'account' | 'category' | 'payee' | 'group' | 'type' | 'date' | 'amount'
+  const [activePanel, setActivePanel] = useState<FilterPanelKey | null>(null)
+  const closeMobileMenu = () => {
+    setActivePanel(null)
+    setMenuOpen(false)
+  }
+  const panelTitle = activePanel
+    ? ({
+        account: t('transactions.account'),
+        category: t('transactions.category'),
+        payee: t('payees.payee'),
+        group: t('splitGroups.group'),
+        type: t('transactions.type'),
+        date: t('transactions.filtersBar.date'),
+        amount: t('transactions.filtersBar.amount'),
+      })[activePanel]
+    : ''
+
+  // Shared option lists, rendered by the desktop submenus and by the mobile
+  // drill-down panels so the two stay in sync. Single-select options accept an
+  // optional callback to close the menu after applying (used on mobile, where
+  // Radix does not auto-close a drill-down item).
+  const renderAccountOptions = () => (
+    <>
+      {accounts.length === 0 ? (
+        <div className="px-2 py-3 text-center text-[12px] text-muted-foreground">
+          {t('transactions.filtersBar.noOptions')}
+        </div>
+      ) : (
+        accounts.map((a) => (
+          <DropdownMenuCheckboxItem
+            key={a.id}
+            checked={filterAccountIds.includes(a.id)}
+            onSelect={(e) => {
+              e.preventDefault()
+              keepAccountSubOpenRef.current = true
+              onAccountIdsChange(toggleInArray(filterAccountIds, a.id))
+            }}
+            className="gap-2 rounded-sm py-1.5 text-[13px]"
+          >
+            <span className="min-w-0 flex-1 truncate text-left">
+              {getAccountName(a)}
+            </span>
+            {a.currency && (
+              <span className="text-[10.5px] uppercase tracking-wide text-muted-foreground/70">
+                {a.currency}
+              </span>
+            )}
+          </DropdownMenuCheckboxItem>
+        ))
+      )}
+      {filterAccountIds.length > 0 && (
+        <>
+          <div className="my-1 h-px bg-border/60" />
+          <DropdownMenuItem
+            onSelect={(e) => {
+              e.preventDefault()
+              keepAccountSubOpenRef.current = true
+              onAccountIdsChange([])
+            }}
+            className="gap-2 rounded-sm px-2 py-1.5 text-[12px] text-muted-foreground"
+          >
+            <X size={12} />
+            {t('transactions.filtersBar.clearSelection')}
+          </DropdownMenuItem>
+        </>
+      )}
+    </>
+  )
+
+  const renderCategoryOptions = () => (
+    <CategoryFilterContent
+      categoryIds={filterCategoryIds}
+      onCategoryIdsChange={onCategoryIdsChange}
+      filterUncategorized={filterUncategorized}
+      onUncategorizedChange={onUncategorizedChange}
+      categories={categories}
+      groups={categoryGroups}
+      onKeepOpen={() => { keepCategorySubOpenRef.current = true }}
+    />
+  )
+
+  const renderPayeeOptions = (closeMenu?: () => void) => (
+    <>
+      <DropdownMenuItem
+        onSelect={() => { onPayeeChange(''); closeMenu?.() }}
+        className={cn(
+          'gap-2 rounded-sm px-2 py-1.5 text-[13px]',
+          !filterPayee && 'bg-primary/5',
+        )}
+      >
+        <span className="size-2.5 shrink-0" />
+        <span className="min-w-0 flex-1 truncate text-left">
+          {t('transactions.all')}
+        </span>
+        {!filterPayee && <Check size={13} className="text-primary" />}
+      </DropdownMenuItem>
+      <div className="my-1 h-px bg-border/60" />
+      {payees.length === 0 ? (
+        <div className="px-2 py-3 text-center text-[12px] text-muted-foreground">
+          {t('transactions.filtersBar.noOptions')}
+        </div>
+      ) : (
+        payees.map((p) => (
+          <DropdownMenuItem
+            key={p.id}
+            onSelect={() => { onPayeeChange(p.id); closeMenu?.() }}
+            className={cn(
+              'gap-2 rounded-sm px-2 py-1.5 text-[13px]',
+              filterPayee === p.id && 'bg-primary/5',
+            )}
+          >
+            <span className="size-2.5 shrink-0" />
+            <span className="min-w-0 flex-1 truncate text-left">
+              {p.name}
+            </span>
+            {filterPayee === p.id && <Check size={13} className="text-primary" />}
+          </DropdownMenuItem>
+        ))
+      )}
+    </>
+  )
+
+  const renderGroupOptions = (closeMenu?: () => void) => (
+    <>
+      <DropdownMenuItem
+        onSelect={() => { onGroupIdChange(''); closeMenu?.() }}
+        className={cn(
+          'gap-2 rounded-sm px-2 py-1.5 text-[13px]',
+          !filterGroupId && 'bg-primary/5',
+        )}
+      >
+        <span className="size-2.5 shrink-0" />
+        <span className="min-w-0 flex-1 truncate text-left">
+          {t('transactions.all')}
+        </span>
+        {!filterGroupId && <Check size={13} className="text-primary" />}
+      </DropdownMenuItem>
+      <div className="my-1 h-px bg-border/60" />
+      {groups.length === 0 ? (
+        <div className="px-2 py-3 text-center text-[12px] text-muted-foreground">
+          {t('transactions.filtersBar.noOptions')}
+        </div>
+      ) : (
+        groups.map((g) => (
+          <DropdownMenuItem
+            key={g.id}
+            onSelect={() => { onGroupIdChange(g.id); closeMenu?.() }}
+            className={cn(
+              'gap-2 rounded-sm px-2 py-1.5 text-[13px]',
+              filterGroupId === g.id && 'bg-primary/5',
+            )}
+          >
+            <span className="size-2.5 shrink-0" />
+            <span className="min-w-0 flex-1 truncate text-left">
+              {g.name}
+            </span>
+            {filterGroupId === g.id && (
+              <Check size={13} className="text-primary" />
+            )}
+          </DropdownMenuItem>
+        ))
+      )}
+    </>
+  )
+
+  const renderTypeOptions = (closeMenu?: () => void) => (
+    <>
+      {[
+        { value: '', label: t('transactions.all') },
+        { value: 'credit', label: t('transactions.income') },
+        { value: 'debit', label: t('transactions.expense') },
+      ].map((opt) => (
+        <DropdownMenuItem
+          key={opt.value || 'all'}
+          onSelect={() => { onTypeChange(opt.value); closeMenu?.() }}
+          className={cn(
+            'gap-2 rounded-sm px-2 py-1.5 text-[13px]',
+            filterType === opt.value && 'bg-primary/5',
+          )}
+        >
+          <span className="size-2.5 shrink-0" />
+          <span className="min-w-0 flex-1 truncate text-left">
+            {opt.label}
+          </span>
+          {filterType === opt.value && (
+            <Check size={13} className="text-primary" />
+          )}
+        </DropdownMenuItem>
+      ))}
+    </>
+  )
+
+  const renderDateOptions = (closeMenu?: () => void) => (
+    <>
+      {datePresets.map((preset) => {
+        const active =
+          filterFrom === preset.from && filterTo === preset.to
+        return (
+          <DropdownMenuItem
+            key={preset.key}
+            onSelect={() => {
+              onDateRangeChange(preset.from, preset.to)
+              closeMenu?.()
+            }}
+            className={cn(
+              'gap-2 rounded-sm px-2 py-1.5 text-[13px]',
+              active && 'bg-primary/5',
+            )}
+          >
+            <span className="size-2.5 shrink-0" />
+            <span className="min-w-0 flex-1 truncate text-left">
+              {preset.label}
+            </span>
+            {active && <Check size={13} className="text-primary" />}
+          </DropdownMenuItem>
+        )
+      })}
+      <div className="my-1 h-px bg-border/60" />
+      <DropdownMenuItem
+        onSelect={openCustomRange}
+        className="justify-between rounded-sm px-2 py-1.5 text-[13px]"
+      >
+        <span>{t('transactions.filtersBar.customRange')}</span>
+        <ChevronRight
+          size={13}
+          className="text-muted-foreground/60"
+        />
+      </DropdownMenuItem>
+    </>
+  )
+
+  const renderAmountOptions = () => (
+    <>
+      <div className="flex items-center gap-2">
+        <div className="flex-1">
+          <label className="block px-1 pb-1 text-[10.5px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/80">
+            {t('transactions.filtersBar.amountMinLabel')}
+          </label>
+          <input
+            type="number"
+            inputMode="decimal"
+            min={0}
+            step="0.01"
+            placeholder="0.00"
+            value={draftMinAmount}
+            onChange={(e) => setDraftMinAmount(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault()
+                applyAmountRange()
+              }
+            }}
+            className="h-8 w-full rounded-md border border-border bg-background px-2 text-[13px] outline-none focus:border-primary/60 focus:ring-[2px] focus:ring-primary/15"
+          />
+        </div>
+        <div className="flex-1">
+          <label className="block px-1 pb-1 text-[10.5px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/80">
+            {t('transactions.filtersBar.amountMaxLabel')}
+          </label>
+          <input
+            type="number"
+            inputMode="decimal"
+            min={0}
+            step="0.01"
+            placeholder="0.00"
+            value={draftMaxAmount}
+            onChange={(e) => setDraftMaxAmount(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault()
+                applyAmountRange()
+              }
+            }}
+            className="h-8 w-full rounded-md border border-border bg-background px-2 text-[13px] outline-none focus:border-primary/60 focus:ring-[2px] focus:ring-primary/15"
+          />
+        </div>
+      </div>
+      <p className="mt-2 text-[10.5px] leading-snug text-muted-foreground/80">
+        {t('transactions.filtersBar.amountHint')}
+      </p>
+      <div className="mt-2 flex items-center justify-between gap-2">
+        <button
+          type="button"
+          onClick={() => {
+            setDraftMinAmount('')
+            setDraftMaxAmount('')
+            onAmountRangeChange('', '')
+            setAmountSubOpen(false)
+            setMenuOpen(false)
+          }}
+          className="text-[12px] font-medium text-muted-foreground transition-colors hover:text-foreground"
+        >
+          {t('transactions.filtersBar.reset')}
+        </button>
+        <Button
+          type="button"
+          size="sm"
+          disabled={!draftMinAmount && !draftMaxAmount}
+          onClick={applyAmountRange}
+        >
+          {t('transactions.filtersBar.apply')}
+        </Button>
+      </div>
+    </>
+  )
+
+  const renderMobilePanel = () => {
+    switch (activePanel) {
+      case 'account': return renderAccountOptions()
+      case 'category': return renderCategoryOptions()
+      case 'payee': return renderPayeeOptions(closeMobileMenu)
+      case 'group': return renderGroupOptions(closeMobileMenu)
+      case 'type': return renderTypeOptions(closeMobileMenu)
+      case 'date': return renderDateOptions(closeMobileMenu)
+      case 'amount': return renderAmountOptions()
+      default: return null
+    }
+  }
+
+  const filterSections: { key: FilterPanelKey; icon: React.ReactNode; label: string; summary: string }[] = [
+    { key: 'account', icon: <Wallet size={14} className="text-muted-foreground" />, label: t('transactions.account'), summary: accountSummary },
+    { key: 'category', icon: <Tag size={14} className="text-muted-foreground" />, label: t('transactions.category'), summary: categorySummary },
+    { key: 'payee', icon: <Store size={14} className="text-muted-foreground" />, label: t('payees.payee'), summary: selectedPayee?.name ?? '' },
+    { key: 'group', icon: <Users size={14} className="text-muted-foreground" />, label: t('splitGroups.group'), summary: selectedGroup?.name ?? '' },
+    { key: 'type', icon: <ArrowUpDown size={14} className="text-muted-foreground" />, label: t('transactions.type'), summary: typeLabel },
+    { key: 'date', icon: <CalendarIcon size={14} className="text-muted-foreground" />, label: t('transactions.filtersBar.date'), summary: dateLabel ?? '' },
+    { key: 'amount', icon: <Coins size={14} className="text-muted-foreground" />, label: t('transactions.filtersBar.amount'), summary: amountLabel ?? '' },
+  ]
+
   return (
     <div className="mb-4">
       <Popover open={dateCustomOpen} onOpenChange={setDateCustomOpen} modal={true}>
@@ -376,12 +730,81 @@ export function TransactionsFilterBar({
             <DropdownMenuContent
               align="end"
               sideOffset={6}
-              className="w-[240px] p-1"
+              className="sm:w-[240px] w-[min(320px,calc(100vw-2rem))] p-1"
             >
-              <DropdownMenuLabel className="px-2 py-1 text-[10.5px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/70">
-                {t('transactions.filtersBar.filterBy')}
-              </DropdownMenuLabel>
-              <DropdownMenuGroup>
+              {isMobile ? (
+                <>
+                  {activePanel ? (
+                    <>
+                      <DropdownMenuItem
+                        onSelect={(e) => {
+                          e.preventDefault()
+                          setActivePanel(null)
+                        }}
+                        className="gap-2 rounded-sm px-2 py-1.5 text-[12.5px] text-muted-foreground"
+                      >
+                        <ChevronLeft size={13} />
+                        {t('common.back')}
+                      </DropdownMenuItem>
+                      <div className="my-1 h-px bg-border/60" />
+                      <DropdownMenuLabel className="px-2 py-1 text-[10.5px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/70">
+                        {panelTitle}
+                      </DropdownMenuLabel>
+                      {renderMobilePanel()}
+                    </>
+                  ) : (
+                    <>
+                      <DropdownMenuLabel className="px-2 py-1 text-[10.5px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/70">
+                        {t('transactions.filtersBar.filterBy')}
+                      </DropdownMenuLabel>
+                      <DropdownMenuGroup>
+                        {filterSections.map((row) => (
+                          <DropdownMenuItem
+                            key={row.key}
+                            onSelect={(e) => {
+                              e.preventDefault()
+                              setActivePanel(row.key)
+                            }}
+                            className="gap-2 text-[13px]"
+                          >
+                            {row.icon}
+                            <span className="flex-1">{row.label}</span>
+                            {row.summary && (
+                              <span className="max-w-[90px] truncate text-[11px] text-muted-foreground">
+                                {row.summary}
+                              </span>
+                            )}
+                            <ChevronRight
+                              size={13}
+                              className="text-muted-foreground/60"
+                            />
+                          </DropdownMenuItem>
+                        ))}
+                      </DropdownMenuGroup>
+                      {hasAnyFilter && (
+                        <>
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem
+                            onSelect={() => {
+                              onClearAll()
+                              setMenuOpen(false)
+                            }}
+                            className="gap-2 rounded-sm px-2 py-1.5 text-[12.5px] text-muted-foreground"
+                          >
+                            <X size={13} />
+                            {t('transactions.clearFilters')}
+                          </DropdownMenuItem>
+                        </>
+                      )}
+                    </>
+                  )}
+                </>
+              ) : (
+                <>
+                  <DropdownMenuLabel className="px-2 py-1 text-[10.5px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/70">
+                    {t('transactions.filtersBar.filterBy')}
+                  </DropdownMenuLabel>
+                  <DropdownMenuGroup>
                 {/* Account submenu (multi) */}
                 <DropdownMenuSub
                   open={accountSubOpen}
@@ -401,51 +824,7 @@ export function TransactionsFilterBar({
                       sideOffset={8}
                       className="max-h-[320px] w-[240px] overflow-y-auto p-1"
                     >
-                      {accounts.length === 0 ? (
-                        <div className="px-2 py-3 text-center text-[12px] text-muted-foreground">
-                          {t('transactions.filtersBar.noOptions')}
-                        </div>
-                      ) : (
-                        accounts.map((a) => (
-                          <DropdownMenuCheckboxItem
-                            key={a.id}
-                            checked={filterAccountIds.includes(a.id)}
-                            onSelect={(e) => {
-                              e.preventDefault()
-                              keepAccountSubOpenRef.current = true
-                              onAccountIdsChange(
-                                toggleInArray(filterAccountIds, a.id),
-                              )
-                            }}
-                            className="gap-2 rounded-sm py-1.5 text-[13px]"
-                          >
-                            <span className="min-w-0 flex-1 truncate text-left">
-                              {getAccountName(a)}
-                            </span>
-                            {a.currency && (
-                              <span className="text-[10.5px] uppercase tracking-wide text-muted-foreground/70">
-                                {a.currency}
-                              </span>
-                            )}
-                          </DropdownMenuCheckboxItem>
-                        ))
-                      )}
-                      {filterAccountIds.length > 0 && (
-                        <>
-                          <div className="my-1 h-px bg-border/60" />
-                          <DropdownMenuItem
-                            onSelect={(e) => {
-                              e.preventDefault()
-                              keepAccountSubOpenRef.current = true
-                              onAccountIdsChange([])
-                            }}
-                            className="gap-2 rounded-sm px-2 py-1.5 text-[12px] text-muted-foreground"
-                          >
-                            <X size={12} />
-                            {t('transactions.filtersBar.clearSelection')}
-                          </DropdownMenuItem>
-                        </>
-                      )}
+                      {renderAccountOptions()}
                     </DropdownMenuSubContent>
                   </DropdownMenuPortal>
                 </DropdownMenuSub>
@@ -469,15 +848,7 @@ export function TransactionsFilterBar({
                       sideOffset={8}
                       className="max-h-[320px] w-[240px] overflow-y-auto p-1"
                     >
-                      <CategoryFilterContent
-                        categoryIds={filterCategoryIds}
-                        onCategoryIdsChange={onCategoryIdsChange}
-                        filterUncategorized={filterUncategorized}
-                        onUncategorizedChange={onUncategorizedChange}
-                        categories={categories}
-                        groups={categoryGroups}
-                        onKeepOpen={() => { keepCategorySubOpenRef.current = true }}
-                      />
+                      {renderCategoryOptions()}
                     </DropdownMenuSubContent>
                   </DropdownMenuPortal>
                 </DropdownMenuSub>
@@ -498,44 +869,7 @@ export function TransactionsFilterBar({
                       sideOffset={8}
                       className="max-h-[320px] w-[240px] overflow-y-auto p-1"
                     >
-                      <DropdownMenuItem
-                        onSelect={() => onPayeeChange('')}
-                        className={cn(
-                          'gap-2 rounded-sm px-2 py-1.5 text-[13px]',
-                          !filterPayee && 'bg-primary/5',
-                        )}
-                      >
-                        <span className="size-2.5 shrink-0" />
-                        <span className="min-w-0 flex-1 truncate text-left">
-                          {t('transactions.all')}
-                        </span>
-                        {!filterPayee && <Check size={13} className="text-primary" />}
-                      </DropdownMenuItem>
-                      <div className="my-1 h-px bg-border/60" />
-                      {payees.length === 0 ? (
-                        <div className="px-2 py-3 text-center text-[12px] text-muted-foreground">
-                          {t('transactions.filtersBar.noOptions')}
-                        </div>
-                      ) : (
-                        payees.map((p) => (
-                          <DropdownMenuItem
-                            key={p.id}
-                            onSelect={() => onPayeeChange(p.id)}
-                            className={cn(
-                              'gap-2 rounded-sm px-2 py-1.5 text-[13px]',
-                              filterPayee === p.id && 'bg-primary/5',
-                            )}
-                          >
-                            <span className="size-2.5 shrink-0" />
-                            <span className="min-w-0 flex-1 truncate text-left">
-                              {p.name}
-                            </span>
-                            {filterPayee === p.id && (
-                              <Check size={13} className="text-primary" />
-                            )}
-                          </DropdownMenuItem>
-                        ))
-                      )}
+                      {renderPayeeOptions()}
                     </DropdownMenuSubContent>
                   </DropdownMenuPortal>
                 </DropdownMenuSub>
@@ -556,44 +890,7 @@ export function TransactionsFilterBar({
                       sideOffset={8}
                       className="max-h-[320px] w-[240px] overflow-y-auto p-1"
                     >
-                      <DropdownMenuItem
-                        onSelect={() => onGroupIdChange('')}
-                        className={cn(
-                          'gap-2 rounded-sm px-2 py-1.5 text-[13px]',
-                          !filterGroupId && 'bg-primary/5',
-                        )}
-                      >
-                        <span className="size-2.5 shrink-0" />
-                        <span className="min-w-0 flex-1 truncate text-left">
-                          {t('transactions.all')}
-                        </span>
-                        {!filterGroupId && <Check size={13} className="text-primary" />}
-                      </DropdownMenuItem>
-                      <div className="my-1 h-px bg-border/60" />
-                      {groups.length === 0 ? (
-                        <div className="px-2 py-3 text-center text-[12px] text-muted-foreground">
-                          {t('transactions.filtersBar.noOptions')}
-                        </div>
-                      ) : (
-                        groups.map((g) => (
-                          <DropdownMenuItem
-                            key={g.id}
-                            onSelect={() => onGroupIdChange(g.id)}
-                            className={cn(
-                              'gap-2 rounded-sm px-2 py-1.5 text-[13px]',
-                              filterGroupId === g.id && 'bg-primary/5',
-                            )}
-                          >
-                            <span className="size-2.5 shrink-0" />
-                            <span className="min-w-0 flex-1 truncate text-left">
-                              {g.name}
-                            </span>
-                            {filterGroupId === g.id && (
-                              <Check size={13} className="text-primary" />
-                            )}
-                          </DropdownMenuItem>
-                        ))
-                      )}
+                      {renderGroupOptions()}
                     </DropdownMenuSubContent>
                   </DropdownMenuPortal>
                 </DropdownMenuSub>
@@ -614,28 +911,7 @@ export function TransactionsFilterBar({
                       sideOffset={8}
                       className="w-[200px] p-1"
                     >
-                      {[
-                        { value: '', label: t('transactions.all') },
-                        { value: 'credit', label: t('transactions.income') },
-                        { value: 'debit', label: t('transactions.expense') },
-                      ].map((opt) => (
-                        <DropdownMenuItem
-                          key={opt.value || 'all'}
-                          onSelect={() => onTypeChange(opt.value)}
-                          className={cn(
-                            'gap-2 rounded-sm px-2 py-1.5 text-[13px]',
-                            filterType === opt.value && 'bg-primary/5',
-                          )}
-                        >
-                          <span className="size-2.5 shrink-0" />
-                          <span className="min-w-0 flex-1 truncate text-left">
-                            {opt.label}
-                          </span>
-                          {filterType === opt.value && (
-                            <Check size={13} className="text-primary" />
-                          )}
-                        </DropdownMenuItem>
-                      ))}
+                      {renderTypeOptions()}
                     </DropdownMenuSubContent>
                   </DropdownMenuPortal>
                 </DropdownMenuSub>
@@ -658,55 +934,7 @@ export function TransactionsFilterBar({
                       sideOffset={8}
                       className="w-[220px] p-1"
                     >
-                      <DropdownMenuItem
-                        onSelect={() => onDateRangeChange('', '')}
-                        className={cn(
-                          'gap-2 rounded-sm px-2 py-1.5 text-[13px]',
-                          !filterFrom && !filterTo && 'bg-primary/5',
-                        )}
-                      >
-                        <span className="size-2.5 shrink-0" />
-                        <span className="min-w-0 flex-1 truncate text-left">
-                          {t('transactions.all')}
-                        </span>
-                        {!filterFrom && !filterTo && (
-                          <Check size={13} className="text-primary" />
-                        )}
-                      </DropdownMenuItem>
-                      <div className="my-1 h-px bg-border/60" />
-                      {datePresets.map((preset) => {
-                        const active =
-                          filterFrom === preset.from && filterTo === preset.to
-                        return (
-                          <DropdownMenuItem
-                            key={preset.key}
-                            onSelect={() =>
-                              onDateRangeChange(preset.from, preset.to)
-                            }
-                            className={cn(
-                              'gap-2 rounded-sm px-2 py-1.5 text-[13px]',
-                              active && 'bg-primary/5',
-                            )}
-                          >
-                            <span className="size-2.5 shrink-0" />
-                            <span className="min-w-0 flex-1 truncate text-left">
-                              {preset.label}
-                            </span>
-                            {active && <Check size={13} className="text-primary" />}
-                          </DropdownMenuItem>
-                        )
-                      })}
-                      <div className="my-1 h-px bg-border/60" />
-                      <DropdownMenuItem
-                        onSelect={openCustomRange}
-                        className="justify-between rounded-sm px-2 py-1.5 text-[13px]"
-                      >
-                        <span>{t('transactions.filtersBar.customRange')}</span>
-                        <ChevronRight
-                          size={13}
-                          className="text-muted-foreground/60"
-                        />
-                      </DropdownMenuItem>
+                      {renderDateOptions()}
                     </DropdownMenuSubContent>
                   </DropdownMenuPortal>
                 </DropdownMenuSub>
@@ -732,76 +960,7 @@ export function TransactionsFilterBar({
                       sideOffset={8}
                       className="w-[260px] p-2"
                     >
-                      <div className="flex items-center gap-2">
-                        <div className="flex-1">
-                          <label className="block px-1 pb-1 text-[10.5px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/80">
-                            {t('transactions.filtersBar.amountMinLabel')}
-                          </label>
-                          <input
-                            type="number"
-                            inputMode="decimal"
-                            min={0}
-                            step="0.01"
-                            placeholder="0.00"
-                            value={draftMinAmount}
-                            onChange={(e) => setDraftMinAmount(e.target.value)}
-                            onKeyDown={(e) => {
-                              if (e.key === 'Enter') {
-                                e.preventDefault()
-                                applyAmountRange()
-                              }
-                            }}
-                            className="h-8 w-full rounded-md border border-border bg-background px-2 text-[13px] outline-none focus:border-primary/60 focus:ring-[2px] focus:ring-primary/15"
-                          />
-                        </div>
-                        <div className="flex-1">
-                          <label className="block px-1 pb-1 text-[10.5px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/80">
-                            {t('transactions.filtersBar.amountMaxLabel')}
-                          </label>
-                          <input
-                            type="number"
-                            inputMode="decimal"
-                            min={0}
-                            step="0.01"
-                            placeholder="0.00"
-                            value={draftMaxAmount}
-                            onChange={(e) => setDraftMaxAmount(e.target.value)}
-                            onKeyDown={(e) => {
-                              if (e.key === 'Enter') {
-                                e.preventDefault()
-                                applyAmountRange()
-                              }
-                            }}
-                            className="h-8 w-full rounded-md border border-border bg-background px-2 text-[13px] outline-none focus:border-primary/60 focus:ring-[2px] focus:ring-primary/15"
-                          />
-                        </div>
-                      </div>
-                      <p className="mt-2 text-[10.5px] leading-snug text-muted-foreground/80">
-                        {t('transactions.filtersBar.amountHint')}
-                      </p>
-                      <div className="mt-2 flex items-center justify-between gap-2">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setDraftMinAmount('')
-                            setDraftMaxAmount('')
-                            onAmountRangeChange('', '')
-                            setAmountSubOpen(false)
-                            setMenuOpen(false)
-                          }}
-                          className="text-[12px] font-medium text-muted-foreground transition-colors hover:text-foreground"
-                        >
-                          {t('transactions.filtersBar.reset')}
-                        </button>
-                        <Button
-                          type="button"
-                          size="sm"
-                          disabled={!draftMinAmount && !draftMaxAmount}
-                          onClick={applyAmountRange}
-                        >
-                          {t('transactions.filtersBar.apply')}
-                        </Button>
-                      </div>
+                      {renderAmountOptions()}
                     </DropdownMenuSubContent>
                   </DropdownMenuPortal>
                 </DropdownMenuSub>
@@ -820,6 +979,8 @@ export function TransactionsFilterBar({
                     <X size={13} />
                     {t('transactions.clearFilters')}
                   </DropdownMenuItem>
+                </>
+              )}
                 </>
               )}
             </DropdownMenuContent>

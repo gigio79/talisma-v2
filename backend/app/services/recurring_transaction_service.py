@@ -3,7 +3,7 @@ import uuid
 from datetime import date, timedelta
 from typing import Optional
 
-from sqlalchemy import or_, select
+from sqlalchemy import or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.account import Account
@@ -125,6 +125,17 @@ async def update_recurring_transaction(
 
     for key, value in update_data.items():
         setattr(recurring, key, value)
+
+    # Propagate a category change to every transaction already materialized
+    # from this recurring (scheduled placeholders and posted/paid rows alike),
+    # so editing the category in the Recorrentes tab actually re-categorizes
+    # the occurrences the user already sees in Transações / Agendamentos.
+    if "category_id" in update_data:
+        await session.execute(
+            update(Transaction)
+            .where(Transaction.recurring_transaction_id == recurring.id)
+            .values(category_id=recurring.category_id)
+        )
 
     # Recalculate next_occurrence when scheduling fields change (Bug fix:
     # editing start_date/frequency/day_of_month didn't update the "Próxima"

@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.account import Account
+from app.models.category import Category
 from app.models.transaction import Transaction
 from app.schemas.recurring_transaction import RecurringTransactionCreate, RecurringTransactionUpdate
 from app.services.recurring_transaction_service import (
@@ -174,6 +175,165 @@ async def test_update_recurring_not_found(session: AsyncSession, test_user, test
         RecurringTransactionUpdate(description="Nope"),
     )
     assert result is None
+
+
+# ---------------------------------------------------------------------------
+# Category propagation
+# ---------------------------------------------------------------------------
+
+
+async def _make_category(session: AsyncSession, test_user, name: str) -> Category:
+    cat = Category(
+        id=uuid.uuid4(),
+        user_id=test_user.id,
+        name=name,
+        icon="x",
+        color="#000000",
+        is_system=True,
+    )
+    session.add(cat)
+    await session.commit()
+    await session.refresh(cat)
+    return cat
+
+
+@pytest.mark.asyncio
+async def test_update_recurring_propagates_category_to_linked_transactions(
+    session: AsyncSession, test_user, test_workspace, test_account_for_recurring
+):
+    """Changing a recurring's category re-categorizes every linked transaction,
+    including already posted (paid) occurrences — not just future placeholders."""
+    cat_a = await _make_category(session, test_user, "Cat A")
+    cat_b = await _make_category(session, test_user, "Cat B")
+
+    rec = await create_recurring_transaction(
+        session,
+        test_workspace.id, test_user.id,
+        RecurringTransactionCreate(
+            description="Conta de Luz",
+            amount=Decimal("200"),
+            type="debit",
+            frequency="monthly",
+            start_date=date(2025, 1, 10),
+            account_id=test_account_for_recurring.id,
+            category_id=cat_a.id,
+            auto_generate=False,
+        ),
+    )
+    rec.auto_generate = True
+    await session.commit()
+
+    count = await generate_pending(session, test_user.id, up_to=date(2025, 3, 15))
+    assert count == 3  # Jan, Feb, Mar
+
+    result = await session.execute(
+        select(Transaction).where(Transaction.recurring_transaction_id == rec.id)
+    )
+    txns = result.scalars().all()
+    assert len(txns) == 3
+    assert all(tx.category_id == cat_a.id for tx in txns)
+
+    # Pay the earliest occurrence so the propagation must cover a posted row too
+    txns[0].status = "posted"
+    await session.commit()
+
+    updated = await update_recurring_transaction(
+        session,
+        rec.id,
+        test_workspace.id,
+        RecurringTransactionUpdate(category_id=cat_b.id),
+    )
+    assert updated is not None
+    assert updated.category_id == cat_b.id
+
+    result = await session.execute(
+        select(Transaction).where(Transaction.recurring_transaction_id == rec.id)
+    )
+    txns = result.scalars().all()
+    assert len(txns) == 3
+    assert all(tx.category_id == cat_b.id for tx in txns)
+
+
+@pytest.mark.asyncio
+async def test_update_recurring_without_category_keeps_linked_transactions(
+    session: AsyncSession, test_user, test_workspace, test_account_for_recurring
+):
+    """Editing non-category fields must not wipe categories on linked rows."""
+    cat_a = await _make_category(session, test_user, "Cat A")
+
+    rec = await create_recurring_transaction(
+        session,
+        test_workspace.id, test_user.id,
+        RecurringTransactionCreate(
+            description="Plano",
+            amount=Decimal("50"),
+            type="debit",
+            frequency="monthly",
+            start_date=date(2025, 1, 1),
+            account_id=test_account_for_recurring.id,
+            category_id=cat_a.id,
+            auto_generate=False,
+        ),
+    )
+    rec.auto_generate = True
+    await session.commit()
+    await generate_pending(session, test_user.id, up_to=date(2025, 2, 15))
+
+    await update_recurring_transaction(
+        session,
+        rec.id,
+        test_workspace.id,
+        RecurringTransactionUpdate(description="Plano Família"),
+    )
+
+    result = await session.execute(
+        select(Transaction).where(Transaction.recurring_transaction_id == rec.id)
+    )
+    txns = result.scalars().all()
+    assert len(txns) >= 1
+    assert all(tx.category_id == cat_a.id for tx in txns)
+
+
+@pytest.mark.asyncio
+async def test_update_recurring_clearing_category_propagates_null(
+    session: AsyncSession, test_user, test_workspace, test_account_for_recurring
+):
+    """Explicitly clearing the category propagates null to linked transactions."""
+    cat_a = await _make_category(session, test_user, "Cat A")
+
+    rec = await create_recurring_transaction(
+        session,
+        test_workspace.id, test_user.id,
+        RecurringTransactionCreate(
+            description="Gasto",
+            amount=Decimal("10"),
+            type="debit",
+            frequency="monthly",
+            start_date=date(2025, 1, 1),
+            account_id=test_account_for_recurring.id,
+            category_id=cat_a.id,
+            auto_generate=False,
+        ),
+    )
+    rec.auto_generate = True
+    await session.commit()
+    await generate_pending(session, test_user.id, up_to=date(2025, 1, 31))
+
+    updated = await update_recurring_transaction(
+        session,
+        rec.id,
+        test_workspace.id,
+        RecurringTransactionUpdate(category_id=None),
+    )
+    assert updated is not None
+    assert updated.category_id is None
+
+    result = await session.execute(
+        select(Transaction).where(Transaction.recurring_transaction_id == rec.id)
+    )
+    txns = result.scalars().all()
+    assert len(txns) == 1
+    assert txns[0].category_id is None
 
 
 @pytest.mark.asyncio

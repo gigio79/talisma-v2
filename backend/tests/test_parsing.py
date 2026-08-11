@@ -80,6 +80,48 @@ def test_picpay_pix_recebido_com_nome_no_corpo():
     assert result.origem_destino == "Maria Silva"
 
 
+def test_picpay_pix_recebido_sem_prefixo():
+    result = parse_notification(
+        "Você recebeu um Pix de R$ 0,01. Toque para visualizar o pagamento",
+        app="PicPay",
+    )
+    assert result is not None
+    assert result.movement_type == "pix_recebido"
+    assert result.tipo == "credit"
+    assert result.valor == Decimal("0.01")
+    assert result.origem_destino == "Não informado"
+    assert result.descricao == "Pix recebido de Não informado via PicPay"
+    assert result.precisa_revisao is False
+
+
+def test_picpay_pix_enviado_tela():
+    result = parse_notification(
+        "Pix enviado para Debora Ribeiro de Campos no valor de R$ 0,01",
+        app="PicPay",
+    )
+    assert result is not None
+    assert result.movement_type == "pix_enviado"
+    assert result.tipo == "debit"
+    assert result.valor == Decimal("0.01")
+    assert result.origem_destino == "Debora Ribeiro de Campos"
+    assert result.descricao == "Pix enviado para Debora Ribeiro de Campos via PicPay"
+    assert result.precisa_revisao is False
+
+
+def test_picpay_compra_aprovada():
+    result = parse_notification(
+        "Compra de R$ 38,00 em Cido Motos foi APROVADA.",
+        app="PicPay",
+    )
+    assert result is not None
+    assert result.movement_type == "debito"
+    assert result.tipo == "debit"
+    assert result.valor == Decimal("38.00")
+    assert result.origem_destino == "Cido Motos"
+    assert result.descricao == "Compra em Cido Motos via PicPay"
+    assert result.precisa_revisao is False
+
+
 def test_nubank_compra_credito_com_cartao_final():
     result = parse_notification(
         "Compra de R$ 19,90 APROVADA em AMAZON BRASIL 1112 para o cartão com final 4251.",

@@ -70,6 +70,8 @@ import { GlobalChatPanel } from '@/components/global-chat-panel'
 import { useFeatureFlags } from '@/hooks/use-feature-flags'
 import { Bot, Search, Sparkles } from 'lucide-react'
 import { setThemeBasedOnSystem } from '@/lib/theme-utils'
+import { NotificationBell } from '@/components/notification-bell'
+import { DueAlertsBanner } from '@/components/due-alerts-banner'
 
 type NavItem =
   | { type: 'link'; key: string; path: string; icon: React.ElementType }
@@ -245,6 +247,8 @@ export function AppLayout() {
           >
             {isDark ? <Sun size={18} /> : <Moon size={18} />}
           </button>
+          {/* Due-date alerts bell — always reachable on mobile too. */}
+          <NotificationBell dark />
           {/* AI chat — opens the global slide-over (also reachable via
               ⌘J). Sits next to the theme toggle so the icon is always
               within thumb reach on mobile too. */}
@@ -512,6 +516,7 @@ export function AppLayout() {
           <div className="px-3 pt-1">
             <WorkspaceSwitcher
               backingUp={backingUp}
+              onNavigate={() => setSidebarOpen(false)}
               onChangePassword={() => setChangePasswordOpen(true)}
               onTwoFactor={() => setTwoFactorOpen(true)}
               onPasskeys={() => setPasskeysOpen(true)}
@@ -547,9 +552,12 @@ export function AppLayout() {
         {/* Main content */}
         <main className="flex-1 min-h-screen overflow-x-hidden lg:ml-60">
           <div className="p-6 max-w-7xl mx-auto">
+            {/* Due-date alerts — dismissible banner above the content on
+                mobile and desktop; the bell sits in the sticky filter bar. */}
+            <DueAlertsBanner />
             {/* Active-collection filter (issue #105): sticky bar above the
                 content so the scope is visible right where the data is. */}
-            <CollectionSelector variant="header" />
+            <CollectionSelector variant="header" right={<NotificationBell />} />
             <Outlet />
           </div>
         </main>

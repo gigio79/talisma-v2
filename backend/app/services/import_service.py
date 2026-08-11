@@ -300,13 +300,33 @@ def _sniff_csv_dialect(text: str):
         return csv.excel
 
 
+# Values accepted in a CSV `type` column, beyond the literal credit/debit
+# words. Brazilian exports commonly use single letters (C/D) or local terms
+# (Entrada/Saída) instead of the English words.
+_CSV_TYPE_CREDIT = {"credit", "c", "crédito", "credito", "entrada", "+"}
+_CSV_TYPE_DEBIT = {"debit", "d", "débito", "debito", "saida", "saída", "-"}
+
+
+def _decode_csv_content(content: bytes) -> str:
+    """Decode CSV bytes as UTF-8 (with BOM), falling back to Latin-1.
+
+    Several Brazilian banks still export CSV/OFX extracts in Windows-1252
+    (which is a superset of Latin-1). The QIF parser applies the same
+    fallback.
+    """
+    try:
+        return content.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        return content.decode("latin-1")
+
+
 def detect_csv_columns(content: bytes) -> list[str]:
     """Return the CSV header column names exactly as they appear in the file.
 
     Used by the import preview so the UI can offer accurate column-mapping
     dropdowns instead of guessing headers client-side.
     """
-    text = content.decode('utf-8-sig')  # Handle BOM
+    text = _decode_csv_content(content)
     dialect = _sniff_csv_dialect(text)
     reader = csv.DictReader(io.StringIO(text), dialect=dialect)
     return [f.strip() for f in (reader.fieldnames or []) if f and f.strip()]
@@ -333,21 +353,28 @@ def parse_csv(
     - column_mapping: explicit Talismã-field -> CSV-header map. Any field
       present here overrides auto-detection; unmapped fields still auto-detect.
     """
-    text = content.decode('utf-8-sig')  # Handle BOM
+    text = _decode_csv_content(content)
     dialect = _sniff_csv_dialect(text)
     reader = csv.DictReader(io.StringIO(text), dialect=dialect)
 
     # Normalize field names
     fieldnames = [f.lower().strip() for f in (reader.fieldnames or [])]
 
-    # Map common column names
+    # Map common column names (Portuguese variants include accented forms —
+    # headers are matched exactly, so "descrição" needs its own entry).
     date_cols = ['date', 'data', 'dt', 'transaction_date', 'data_transacao']
-    desc_cols = ['description', 'descricao', 'desc', 'memo', 'historico', 'lancamento']
+    desc_cols = [
+        'description', 'descricao', 'descrição', 'desc',
+        'memo', 'historico', 'histórico', 'lancamento', 'lançamento',
+    ]
     amount_cols = ['amount', 'valor', 'value', 'quantia']
     type_cols = ['type', 'tipo']
     category_cols = ['category', 'categoria']
     currency_cols = ['currency', 'moeda', 'currency_code']
-    fx_rate_cols = ['fx_rate', 'fx_rate_used', 'taxa_cambio', 'exchange_rate', 'taxa']
+    fx_rate_cols = [
+        'fx_rate', 'fx_rate_used', 'taxa_cambio', 'taxa_de_cambio',
+        'taxa de câmbio', 'exchange_rate', 'taxa',
+    ]
 
     # Normalize the user-supplied column mapping (Talismã field -> CSV header).
     mapping = {
@@ -467,8 +494,14 @@ def parse_csv(
             if flip_amount:
                 amount = -amount
 
-            if type_col and row.get(type_col, '').strip() in ('credit', 'debit'):
-                txn_type = row[type_col].strip()
+            if type_col:
+                raw_type = row.get(type_col, '').strip().lower()
+                if raw_type in _CSV_TYPE_CREDIT:
+                    txn_type = "credit"
+                elif raw_type in _CSV_TYPE_DEBIT:
+                    txn_type = "debit"
+                else:
+                    txn_type = "credit" if amount > 0 else "debit"
             else:
                 txn_type = "credit" if amount > 0 else "debit"
             amount = abs(amount)

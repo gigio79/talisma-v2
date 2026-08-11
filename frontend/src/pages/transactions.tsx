@@ -202,7 +202,6 @@ export default function TransactionsPage() {
     // Skip re-runs with an unchanged query (e.g. StrictMode's second mount),
     // so they can't override the initial current-month default.
     if (prevSearchRef.current === search) return
-    const isInitial = prevSearchRef.current === null
     prevSearchRef.current = search
 
     const nextQ = searchParams.get('q') ?? ''
@@ -224,11 +223,13 @@ export default function TransactionsPage() {
       // Explicit range in the URL (shared/bookmarked link) wins.
       setFilterFrom(urlFrom ?? '')
       setFilterTo(urlTo ?? '')
-    } else if (!isInitial) {
-      // A genuine navigation cleared the range (e.g. Clear filters): show all.
-      // On the initial mount we keep the current-month default seeded above.
-      setFilterFrom('')
-      setFilterTo('')
+    } else {
+      // No explicit range: fall back to the current month. The month is the
+      // page's default view (and what "Limpar filtros" restores), so the
+      // header stepper, the date chip and the listing never diverge.
+      const { from, to } = monthRange(currentMonth())
+      setFilterFrom(from)
+      setFilterTo(to)
     }
     setFilterMinAmount(searchParams.get('min_amount') ?? '');
     setFilterMaxAmount(searchParams.get('max_amount') ?? '');
@@ -418,6 +419,11 @@ export default function TransactionsPage() {
     staleTime: 5 * 60 * 1000,
   })
   const isAccrual = accountingModeData?.mode === 'accrual'
+
+  // Effective date shown in the listing: the manual bill-cycle override when
+  // set, otherwise the computed effective date (accrual) or purchase date.
+  const displayDate = (tx: Transaction) =>
+    tx.effective_bill_date ?? (isAccrual ? tx.effective_date : tx.date)
 
   const invalidateAfterTxMutation = () => invalidateFinancialQueries(queryClient)
 
@@ -1178,7 +1184,15 @@ export default function TransactionsPage() {
             </span>
           </div>
           {showInlineDate && (
-            <p className="text-xs text-muted-foreground mt-0.5">{new Date(tx.date + 'T00:00:00').toLocaleDateString(dateLocale)}</p>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              {new Date(displayDate(tx) + 'T00:00:00').toLocaleDateString(dateLocale)}
+              {displayDate(tx) !== tx.date && (
+                <span className="text-[11px] text-muted-foreground/70">
+                  {' · '}
+                  {t('transactions.purchasedOn', { date: new Date(tx.date + 'T00:00:00').toLocaleDateString(dateLocale) })}
+                </span>
+              )}
+            </p>
           )}
           {(showInlineNotes || showInlineTags) && tx.notes && (
             <div className="mt-1 space-y-0.5">
@@ -1323,7 +1337,17 @@ export default function TransactionsPage() {
       case 'date':
         return (
           <TableCell key={col.id} style={widthStyle} className={`${baseClass} min-w-0 overflow-hidden text-sm text-muted-foreground tabular-nums`}>
-            {new Date(tx.date + 'T00:00:00').toLocaleDateString(dateLocale)}
+            <span className="block">
+              {new Date(displayDate(tx) + 'T00:00:00').toLocaleDateString(dateLocale)}
+            </span>
+            {displayDate(tx) !== tx.date && (
+              <span
+                className="block text-[11px] text-muted-foreground/70 truncate"
+                title={t('transactions.purchasedOn', { date: new Date(tx.date + 'T00:00:00').toLocaleDateString(dateLocale) })}
+              >
+                {t('transactions.purchasedOn', { date: new Date(tx.date + 'T00:00:00').toLocaleDateString(dateLocale) })}
+              </span>
+            )}
           </TableCell>
         )
       case 'description':
@@ -1580,13 +1604,26 @@ export default function TransactionsPage() {
         onTypeChange={(v) => { setFilterType(v); setPage(1) }}
         filterFrom={filterFrom}
         filterTo={filterTo}
-        onDateRangeChange={(from, to) => { setFilterFrom(from); setFilterTo(to); setPage(1) }}
+        onDateRangeChange={(from, to) => {
+          if (from || to) {
+            setFilterFrom(from)
+            setFilterTo(to)
+          } else {
+            // Clearing the date range restores the current month — the page's
+            // default view — so the stepper and the listing stay consistent.
+            const { from: f, to: t } = monthRange(currentMonth())
+            setFilterFrom(f)
+            setFilterTo(t)
+          }
+          setPage(1)
+        }}
         filterMinAmount={filterMinAmount}
         filterMaxAmount={filterMaxAmount}
         onAmountRangeChange={(min, max) => { setFilterMinAmount(min); setFilterMaxAmount(max); setPage(1) }}
         onClearAll={() => {
-          setFilterFrom('')
-          setFilterTo('')
+          const { from, to } = monthRange(currentMonth())
+          setFilterFrom(from)
+          setFilterTo(to)
           setFilterAccountIds([])
           setFilterCategoryIds([])
           setFilterUncategorized(false)
@@ -1843,13 +1880,16 @@ export default function TransactionsPage() {
       <div
         className={`fixed bottom-0 left-0 right-0 lg:left-60 z-50 transition-transform duration-200 ease-out ${selectedIds.size > 0 ? 'translate-y-0' : 'translate-y-full'}`}
       >
-        <div className="mx-auto max-w-7xl px-3 md:px-6 pb-4 md:pb-6">
-          <div className="flex items-stretch gap-1.5 bg-card border border-border shadow-xl rounded-2xl p-2">
+        <div className="mx-auto max-w-7xl px-3 md:px-6 pb-[max(1rem,env(safe-area-inset-bottom))] md:pb-6">
+          {/* All bulk actions stay visible; on narrow screens the bar wraps
+              to extra lines instead of hiding anything or scrolling. env()
+              bottom padding keeps the device gesture bar from overlapping. */}
+          <div className="flex items-center flex-wrap gap-1.5 bg-card border border-border shadow-xl rounded-2xl p-2">
             {/* Selection count + net total — stacked vertically so the
                 sum (issue #185) adds no horizontal width to an already
                 crowded bar. The sum is hidden below sm where only the
                 count pill shows. */}
-            <div className="flex items-center gap-2.5 pl-3 pr-4 whitespace-nowrap">
+            <div className="flex items-center gap-2.5 pl-3 pr-4 whitespace-nowrap shrink-0">
               <span className="inline-flex items-center justify-center size-6 rounded-full bg-primary/10 text-primary text-xs font-semibold shrink-0">
                 {selectedIds.size}
               </span>
@@ -1889,7 +1929,7 @@ export default function TransactionsPage() {
               groups={categoryGroupsList ?? []}
               placeholder={t('transactions.selectCategory')}
               disabled={bulkCategorizeMutation.isPending}
-              className="w-44 md:w-56 h-auto py-2 border-transparent bg-transparent hover:bg-muted/60 focus:bg-muted/60 focus-visible:ring-0"
+              className="w-44 md:w-56 h-auto py-2 border-transparent bg-transparent hover:bg-muted/60 focus:bg-muted/60 focus-visible:ring-0 shrink-0"
               contentProps={{ side: 'top', sideOffset: 8 }}
             />
 
@@ -1912,7 +1952,7 @@ export default function TransactionsPage() {
             <div className="w-px bg-border/60 self-stretch" />
 
             {/* Add tags inline */}
-            <div className="flex items-center gap-1 px-1">
+            <div className="flex items-center gap-1 px-1 shrink-0">
               <input
                 type="text"
                 value={bulkTagInput}

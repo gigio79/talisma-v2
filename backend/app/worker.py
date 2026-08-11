@@ -53,6 +53,12 @@ celery_app.conf.beat_schedule = {
         # stamped with the 1:1 fallback (or left NULL) once real rates land.
         "schedule": 60 * 60 * 12,
     },
+    "generate-due-date-alerts-hourly": {
+        "task": "app.tasks.notification_tasks.generate_due_date_alerts",
+        # Every hour; idempotent (dedup on user+target+alert_type+due_date) and
+        # computes each user's "today" in their own timezone.
+        "schedule": 60 * 60,
+    },
 }
 
 celery_app.conf.include = [
@@ -60,6 +66,7 @@ celery_app.conf.include = [
     "app.tasks.recurring_tasks",
     "app.tasks.asset_tasks",
     "app.tasks.fx_rate_tasks",
+    "app.tasks.notification_tasks",
     # Optional agents module — registering the import is harmless when
     # AGENTS_ENABLED=false (the task just won't be dispatched).
     "app.agents.tasks.ingest",

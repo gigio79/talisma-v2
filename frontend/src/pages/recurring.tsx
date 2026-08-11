@@ -141,6 +141,9 @@ function RecurringTab() {
     return map[f] ?? f
   }
 
+  const categoryName = (id: string | null | undefined) =>
+    categoriesList?.find((c) => c.id === id)?.name
+
   return (
     <>
       <SectionCard>
@@ -175,6 +178,7 @@ function RecurringTab() {
                 <th className={`${TH} text-left w-28 hidden md:table-cell`}>{t('recurring.frequency')}</th>
                 <th className={`${TH} text-left w-32 hidden md:table-cell`}>{t('recurring.nextOccurrence')}</th>
                 <th className={`${TH} text-left w-24 hidden sm:table-cell`}>{t('recurring.status')}</th>
+                <th className={`${TH} text-left w-32 hidden lg:table-cell`}>{t('recurring.category')}</th>
                 {canWrite && <th className={`${TH} pr-4 sm:pr-5 text-right w-24`}>{t('recurring.actions')}</th>}
               </tr>
             </thead>
@@ -210,6 +214,9 @@ function RecurringTab() {
                     )}>
                       {rt.is_active ? t('recurring.active') : t('recurring.inactive')}
                     </span>
+                  </td>
+                  <td className="py-3 text-xs text-muted-foreground hidden lg:table-cell">
+                    {rt.category_id ? categoryName(rt.category_id) ?? '–' : '–'}
                   </td>
                   {canWrite && (
                     <td className="py-3 pr-4 sm:pr-5">

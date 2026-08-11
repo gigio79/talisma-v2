@@ -3,6 +3,7 @@ import json
 import pytest
 from httpx import AsyncClient
 
+from app.core.config import get_settings
 from app.models.account import Account
 
 
@@ -380,3 +381,45 @@ async def test_import_with_category_override(
     logs_resp = await client.get("/api/import-logs", headers=auth_headers)
     log = next(entry for entry in logs_resp.json() if entry["id"] == import_log_id)
     assert log["transaction_count"] == 1
+
+
+async def test_preview_rejects_oversized_file(
+    client: AsyncClient, auth_headers, test_account, monkeypatch
+):
+    """Files larger than the configured import limit are rejected with a 413."""
+    monkeypatch.setattr(get_settings(), "import_max_file_size_mb", 0)
+    csv_content = b"data,descricao,valor\n10/02/2026,X,-1.00\n"
+    response = await client.post(
+        "/api/transactions/import/preview",
+        headers=auth_headers,
+        files={"file": ("extrato.csv", csv_content, "text/csv")},
+    )
+    assert response.status_code == 413
+    assert "import limit" in response.json()["detail"]
+
+
+async def test_import_rejects_too_many_transactions(
+    client: AsyncClient, auth_headers, test_account: Account, monkeypatch
+):
+    """Commits above the configured transaction limit are rejected with a 413."""
+    monkeypatch.setattr(get_settings(), "import_max_transactions", 1)
+    response = await client.post(
+        "/api/transactions/import",
+        headers=auth_headers,
+        json={
+            "account_id": str(test_account.id),
+            "transactions": [
+                {"description": "A", "amount": "1.00", "date": "2026-02-10", "type": "debit"},
+                {"description": "B", "amount": "2.00", "date": "2026-02-11", "type": "debit"},
+            ],
+        },
+    )
+    assert response.status_code == 413
+    assert "transaction limit" in response.json()["detail"]
+
+
+async def test_delete_import_log_invalid_uuid(client: AsyncClient, auth_headers):
+    """A malformed import-log ID returns a 400 instead of a 500."""
+    response = await client.delete("/api/import-logs/not-a-uuid", headers=auth_headers)
+    assert response.status_code == 400
+    assert "import log ID" in response.json()["detail"]

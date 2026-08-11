@@ -107,6 +107,17 @@ class Transaction(Base):
     # pix_recebido | pix_enviado | debito | credito. `type` (debit/credit)
     # above stays derived from it for balance/P&L math.
     movement_type: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    # Audit link from a reconciliation (duplicate A Pagar vs Lançada).
+    # When the user reconciles a real payment (A) into a scheduled row (B),
+    # B absorbs A's data and A is deleted; this column records "B absorbed A"
+    # for traceability and so smart-match skips already-merged pairs.
+    # Deliberately no ForeignKey: A is deleted on purpose, and the audit link
+    # must survive that deletion.
+    reconciled_with_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        nullable=True,
+        index=True,
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     account: Mapped["Account"] = relationship(back_populates="transactions")

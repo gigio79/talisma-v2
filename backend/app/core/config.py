@@ -117,9 +117,10 @@ class Settings(BaseSettings):
     # external dependency on the Brazilian government endpoint).
     tesouro_direto_enabled: bool = True
 
-    # MacroDroid webhook — API key for authenticating incoming notifications.
-    # When set, the /api/webhooks/macrodroid endpoint requires this key in
-    # the Authorization header (Bearer <key>). Leave empty to disable auth
+    # MacroDroid webhook — shared secret for authenticating incoming
+    # notifications. Accepted as HTTP Basic Auth (any username + this as
+    # password; MacroDroid may send an empty/arbitrary username) or legacy
+    # Bearer (`Authorization: Bearer <key>`). Leave empty to disable auth
     # (not recommended for production).
     macrodroid_webhook_secret: str = ""
 
@@ -127,6 +128,17 @@ class Settings(BaseSettings):
     # assigned to this workspace. Can be overridden per-request with
     # workspace_id in the JSON payload.
     macrodroid_workspace_id: str = ""
+
+    # Import limits — guard against oversized files and bulk-commit abuse.
+    import_max_file_size_mb: int = 10
+    import_max_transactions: int = 5000
+
+    # Web Push (VAPID) — mobile push notifications for due-date alerts.
+    # Public key is exposed to the browser; private key is server-only.
+    # `vapid_subject` is a `mailto:` or `https:` contact for the push service.
+    vapid_public_key: str = ""
+    vapid_private_key: str = ""
+    vapid_subject: str = "mailto:admin@localhost"
 
     model_config = SettingsConfigDict(env_file=".env", secrets_dir=CREDENTIALS_DIRECTORY)
 

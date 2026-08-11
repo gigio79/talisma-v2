@@ -373,6 +373,29 @@ async def test_create_transaction(
 
 
 @pytest.mark.asyncio
+async def test_create_transaction_exposes_effective_date_and_status(
+    client: AsyncClient, auth_headers, test_account: Account
+):
+    """TransactionRead must surface effective_date + derived status so the UI
+    can render the effective date instead of the raw purchase date."""
+    response = await client.post(
+        "/api/transactions",
+        headers=auth_headers,
+        json={
+            "account_id": str(test_account.id),
+            "description": "Conta futura",
+            "amount": "250.00",
+            "date": "2099-01-10",
+            "type": "debit",
+        },
+    )
+    assert response.status_code == 201
+    data = response.json()
+    assert data["effective_date"] == "2099-01-10"
+    assert data["status"] == "scheduled"
+
+
+@pytest.mark.asyncio
 async def test_create_transaction_auto_categorize(
     client: AsyncClient, auth_headers, test_account: Account,
     test_rules, test_categories: list[Category],

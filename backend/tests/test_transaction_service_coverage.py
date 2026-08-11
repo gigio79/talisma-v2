@@ -7,7 +7,7 @@ assorted edge branches. See test_transaction_service.py for the baseline.
 """
 
 import uuid
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
 import pytest
@@ -997,3 +997,101 @@ async def test_get_transactions_unbilled_only_forward_override(session, test_use
         unbilled_only=True, from_date=date(2025, 5, 1), to_date=date(2025, 5, 31),
     )
     assert "ForwardOverride" in {t.description for t in res}
+
+
+# ---------------------------------------------------------------------------
+# Status derivation + effective_bill_date persistence (create/update)
+# ---------------------------------------------------------------------------
+
+
+async def test_create_cc_future_effective_bill_date_scheduled_and_links_bill(
+    session, test_user, test_workspace, cc_account
+):
+    """A CC purchase whose manual vencimento ("Data efetiva da fatura") is in
+    the future must persist the override, link the matching bill, and default
+    to scheduled ("a pagar") — the cash outflow hasn't happened yet."""
+    future = date.today() + timedelta(days=30)
+    bill = CreditCardBill(
+        id=uuid.uuid4(), user_id=test_user.id, workspace_id=test_workspace.id,
+        account_id=cc_account.id, external_id="b-status",
+        due_date=future, total_amount=Decimal("500"), currency="BRL",
+    )
+    session.add(bill)
+    await session.commit()
+
+    txn = await create_transaction(session, test_workspace.id, test_user.id, TransactionCreate(
+        account_id=cc_account.id, description="Farmácia", amount=Decimal("151.79"),
+        date=date.today(), type="debit", effective_bill_date=future,
+    ))
+    assert txn.effective_bill_date == future
+    assert txn.effective_date == future
+    assert txn.status == "scheduled"
+    assert txn.bill_id == bill.id
+
+
+async def test_create_cc_past_effective_bill_date_posted(session, test_user, test_workspace, cc_account):
+    past = date.today() - timedelta(days=30)
+    txn = await create_transaction(session, test_workspace.id, test_user.id, TransactionCreate(
+        account_id=cc_account.id, description="Compra antiga", amount=Decimal("40"),
+        date=past, type="debit", effective_bill_date=past,
+    ))
+    assert txn.effective_bill_date == past
+    assert txn.effective_date == past
+    assert txn.status == "posted"
+
+
+async def test_create_future_dated_debit_checking_scheduled(session, test_user, test_workspace, acct):
+    future = date.today() + timedelta(days=5)
+    txn = await create_transaction(session, test_workspace.id, test_user.id, TransactionCreate(
+        account_id=acct.id, description="Conta a pagar", amount=Decimal("250"),
+        date=future, type="debit",
+    ))
+    assert txn.effective_date == future
+    assert txn.status == "scheduled"
+
+
+async def test_create_explicit_status_respected(session, test_user, test_workspace, cc_account):
+    future = date.today() + timedelta(days=30)
+    txn = await create_transaction(session, test_workspace.id, test_user.id, TransactionCreate(
+        account_id=cc_account.id, description="Pago adiantado", amount=Decimal("60"),
+        date=date.today(), type="debit", effective_bill_date=future, status="posted",
+    ))
+    assert txn.effective_bill_date == future
+    assert txn.status == "posted"
+
+
+async def test_update_effective_bill_date_flips_status(session, test_user, test_workspace, cc_account):
+    past = date.today() - timedelta(days=30)
+    txn = await create_transaction(session, test_workspace.id, test_user.id, TransactionCreate(
+        account_id=cc_account.id, description="Reclassificada", amount=Decimal("70"),
+        date=past, type="debit",
+    ))
+    assert txn.status == "posted"
+    future = date.today() + timedelta(days=30)
+    updated = await update_transaction(
+        session, txn.id, test_workspace.id, test_user.id,
+        TransactionUpdate(effective_bill_date=future),
+    )
+    assert updated.effective_bill_date == future
+    assert updated.status == "scheduled"
+    # Moving the override back to the past returns it to posted.
+    updated2 = await update_transaction(
+        session, txn.id, test_workspace.id, test_user.id,
+        TransactionUpdate(effective_bill_date=past),
+    )
+    assert updated2.status == "posted"
+
+
+async def test_update_explicit_status_wins(session, test_user, test_workspace, cc_account):
+    future = date.today() + timedelta(days=30)
+    txn = await create_transaction(session, test_workspace.id, test_user.id, TransactionCreate(
+        account_id=cc_account.id, description="Farmácia", amount=Decimal("151.79"),
+        date=date.today(), type="debit", effective_bill_date=future,
+    ))
+    assert txn.status == "scheduled"
+    # "Pagar" action: explicit status is respected even with a future vencimento.
+    updated = await update_transaction(
+        session, txn.id, test_workspace.id, test_user.id,
+        TransactionUpdate(status="posted", description="Farmácia paga"),
+    )
+    assert updated.status == "posted"

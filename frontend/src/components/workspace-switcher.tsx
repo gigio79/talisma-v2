@@ -86,6 +86,10 @@ interface AccountMenuProps {
   onUpdateAvailable: () => void
   /** True when the AGENTS_ENABLED env flag is on. */
   agentsEnabled: boolean
+  /** Called before any navigation/workspace switch so the host can close the
+   * mobile sidebar drawer — otherwise the destination page renders covered
+   * by the still-open drawer (clipped look). */
+  onNavigate?: () => void
 }
 
 /**
@@ -105,6 +109,7 @@ export function WorkspaceSwitcher({
   onBackup,
   onUpdateAvailable,
   agentsEnabled,
+  onNavigate,
 }: AccountMenuProps) {
   const { t, i18n } = useTranslation()
   const navigate = useNavigate()
@@ -128,6 +133,7 @@ export function WorkspaceSwitcher({
       await switchWorkspace(ws.id)
       setCreateOpen(false)
       setNewName('')
+      onNavigate?.()
       navigate('/workspace/settings')
     },
     onError: (e: unknown) => {
@@ -180,7 +186,10 @@ export function WorkspaceSwitcher({
                 return (
                   <DropdownMenuItem
                     key={w.id}
-                    onClick={() => void switchWorkspace(w.id)}
+                    onClick={() => {
+                      onNavigate?.()
+                      void switchWorkspace(w.id)
+                    }}
                     className="flex items-center gap-2"
                   >
                     <CategoryIcon
@@ -203,7 +212,10 @@ export function WorkspaceSwitcher({
 
           {/* Workspace actions */}
           <DropdownMenuItem
-            onClick={() => navigate('/workspace/settings')}
+            onClick={() => {
+              onNavigate?.()
+              navigate('/workspace/settings')
+            }}
             className="flex items-center gap-2"
           >
             <Settings size={14} />
@@ -222,7 +234,10 @@ export function WorkspaceSwitcher({
           {/* Admin */}
           {user.is_superuser && (
             <DropdownMenuItem
-              onClick={() => navigate('/admin')}
+              onClick={() => {
+                onNavigate?.()
+                navigate('/admin')
+              }}
               className="flex items-center gap-2"
             >
               <Shield size={14} />
@@ -263,7 +278,10 @@ export function WorkspaceSwitcher({
 
           {agentsEnabled && (
             <DropdownMenuItem
-              onClick={() => navigate('/agents')}
+              onClick={() => {
+                onNavigate?.()
+                navigate('/agents')
+              }}
               className="flex items-center gap-2"
             >
               <Sparkles size={14} />
