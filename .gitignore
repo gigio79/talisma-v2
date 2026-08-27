@@ -19,3 +19,10 @@ docker-compose.override.yml
 # — never commit.
 backend/data/
 export/
+
+# Local session/working artifacts — kept local only, never committed.
+# May contain personal financial data and embedded API tokens.
+SESSAO.md
+NOTES-SESSION-2025-07-25.md
+debt_report.csv
+import_transactions.py
