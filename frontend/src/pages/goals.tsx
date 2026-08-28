@@ -2,6 +2,7 @@ import { createElement, useState } from 'react'
 import { getAccountName } from '@/lib/account-utils'
 import { useTranslation } from 'react-i18next'
 import { useDisplayLocale } from '@/hooks/use-display-locale'
+import { digitsToRawAmount } from '@/lib/format'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { goals as goalsApi, accounts as accountsApi, assets as assetsApi, assetGroups as assetGroupsApi, currencies as currenciesApi } from '@/lib/api'
 import { toast } from 'sonner'
@@ -439,7 +440,7 @@ export default function GoalsPage() {
               const formData = new FormData(e.currentTarget)
               const payload: Record<string, unknown> = {
                 name: formData.get('name') as string,
-                target_amount: parseFloat(formData.get('target_amount') as string),
+                target_amount: parseFloat(digitsToRawAmount(formData.get('target_amount') as string)),
                 currency: (formData.get('currency') as string) || userCurrency,
                 tracking_type: formData.get('tracking_type') as string,
                 target_date: targetDate || null,
@@ -449,7 +450,7 @@ export default function GoalsPage() {
 
               const tt = formData.get('tracking_type') as string
               if (tt === 'manual') {
-                payload.current_amount = parseFloat((formData.get('current_amount') as string) || '0')
+                payload.current_amount = parseFloat(digitsToRawAmount((formData.get('current_amount') as string) || '0'))
               }
               if (tt === 'account') {
                 payload.account_id = (formData.get('account_id') as string) || null
@@ -480,9 +481,10 @@ export default function GoalsPage() {
                 <Label>{t('goals.targetAmount')}</Label>
                 <Input
                   name="target_amount"
-                  type="number"
-                  step="0.01"
+                  type="text"
+                  inputMode="decimal"
                   defaultValue={editing?.target_amount?.toString() ?? ''}
+                  className="text-right tabular-nums"
                   required
                 />
               </div>
@@ -532,9 +534,10 @@ export default function GoalsPage() {
                 <Label>{t('goals.currentAmount')}</Label>
                 <Input
                   name="current_amount"
-                  type="number"
-                  step="0.01"
+                  type="text"
+                  inputMode="decimal"
                   defaultValue={editing?.tracking_type === 'manual' ? editing?.current_amount?.toString() : '0'}
+                  className="text-right tabular-nums"
                 />
               </div>
             )}

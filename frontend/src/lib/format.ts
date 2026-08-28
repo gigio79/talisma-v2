@@ -152,3 +152,78 @@ export function formatCurrency(
     maximumFractionDigits: 2,
   }).format(value)
 }
+
+/**
+ * Derive the decimal and thousands separators used by a given locale. Falls
+ * back to "1,234.56" (en-US) when Intl is not available in the environment.
+ */
+export function getNumberSeparators(
+  locale = 'en-US',
+): { decimal: string; thousands: string } {
+  try {
+    const parts = new Intl.NumberFormat(locale).formatToParts(1234.5)
+    let decimal = '.'
+    let thousands = ','
+    for (const p of parts) {
+      if (p.type === 'decimal') decimal = p.value
+      else if (p.type === 'group') thousands = p.value
+    }
+    return { decimal, thousands }
+  } catch {
+    return { decimal: '.', thousands: ',' }
+  }
+}
+
+/**
+ * Currency input helpers used by every editable monetary field.
+ *
+ * The internal value stored in React state is always a *plain* numeric string
+ * with a dot decimal separator (e.g. `"5966.04"`) — same format the fields use
+ * today, so `parseFloat()` at submit keeps working unchanged.
+ *
+ * Typing follows the common "centavos" mask: each new digit shifts the value
+ * left, so the last two digits are the cents. Typing `596604` → displayed
+ * `5.966,04`, stored `5966.04`. Because the mask is derived from the *digits*
+ * of the stored value, editing anywhere stays consistent and the cursor stays
+ * at the end (acceptable for number entry).
+ */
+
+/**
+ * Build the raw (dot-decimal) value from a user keystroke. Digits are kept,
+ * the last two become cents. Returns `""` when nothing numeric remains.
+ *
+ * The controlled input's `onChange` feeds back the *formatted* (masked) text,
+ * which for values < 1 includes the displayed leading zero (e.g. `0,34`). Normally
+ * that leading zero would re-enter the digit stream on every keystroke and
+ * accumulate (`0,034` → `00.34`). We therefore strip leading zeros from the
+ * integer part so typing `3400` yields `34.00`, never `00.34`/`0034.00`.
+ */
+export function digitsToRawAmount(value: string): string {
+  const digits = (value ?? '').replace(/\D/g, '')
+  if (!digits) return ''
+  const int = (digits.slice(0, -2) || '0').replace(/^0+/, '') || '0'
+  const dec = digits.slice(-2).padStart(2, '0')
+  return `${int}.${dec}`
+}
+
+/**
+ * Format a raw (dot-decimal) amount for display with the locale's separators
+ * and exactly two decimals. `"5966.04"` + pt-BR → `"5.966,04"`.
+ */
+export function formatRawAmount(raw: string, locale = 'en-US'): string {
+  if (!raw) return ''
+  const { decimal, thousands } = getNumberSeparators(locale)
+  const [intPart, decPart] = raw.split('.')
+  const int = (intPart || '0').replace(/\B(?=(\d{3})+(?!\d))/g, thousands)
+  const dec = (decPart || '').padEnd(2, '0').slice(0, 2)
+  return `${int}${decimal}${dec}`
+}
+
+/**
+ * Convenience: build the raw amount string from the displayed, locale-masked
+ * string (e.g. parsing a pre-filled seed that was formatted).
+ */
+export function rawAmountFromMasked(masked: string): string {
+  const digits = (masked ?? '').replace(/\D/g, '')
+  return digitsToRawAmount(digits)
+}

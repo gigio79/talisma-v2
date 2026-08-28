@@ -7,6 +7,7 @@ import { useDisplayLocale, useDateLocale } from '@/hooks/use-display-locale'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import axios from 'axios'
 import { accounts, connections, currencies } from '@/lib/api'
+import { formatRawAmount, digitsToRawAmount } from '@/lib/format'
 import { invalidateFinancialQueries } from '@/lib/invalidate-queries'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -741,6 +742,7 @@ function AccountDialog({
 }) {
   const { t } = useTranslation()
   const { user } = useAuth()
+  const locale = useDisplayLocale()
   const userCurrency = user?.preferences?.currency_display ?? 'USD'
   const { data: supportedCurrencies } = useQuery({
     queryKey: ['currencies'],
@@ -866,11 +868,11 @@ function AccountDialog({
                       : t('accounts.balance')}
                   </Label>
                   <Input
-                    type="number"
-                    step="0.01"
-                    min={type === 'credit_card' ? '0' : undefined}
-                    value={balance}
-                    onChange={(e) => setBalance(e.target.value)}
+                    type="text"
+                    inputMode="decimal"
+                    value={formatRawAmount(balance, locale)}
+                    onChange={(e) => setBalance(digitsToRawAmount(e.target.value))}
+                    className="text-right tabular-nums"
                   />
                 </div>
                 <div className="space-y-2">
@@ -894,12 +896,12 @@ function AccountDialog({
               <div className="space-y-2">
                 <Label>{t('accounts.creditLimit')}</Label>
                 <Input
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  value={creditLimit}
-                  onChange={(e) => setCreditLimit(e.target.value)}
+                  type="text"
+                  inputMode="decimal"
+                  value={formatRawAmount(creditLimit, locale)}
+                  onChange={(e) => setCreditLimit(digitsToRawAmount(e.target.value))}
                   placeholder="0.00"
+                  className="text-right tabular-nums"
                 />
               </div>
               <div className="grid grid-cols-2 gap-4">

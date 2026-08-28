@@ -31,6 +31,7 @@ import {
   type GroupMemberPayload,
   type GroupSettlementPayload,
 } from '@/lib/api'
+import { formatRawAmount, digitsToRawAmount } from '@/lib/format'
 import { MemberForm } from '@/components/member-form'
 import { useAuth } from '@/contexts/auth-context'
 import { useWorkspace } from '@/contexts/workspace-context'
@@ -1142,11 +1143,12 @@ export default function GroupDetailPage() {
               <div className="space-y-2 col-span-2">
                 <Label>{t('splitGroups.amount')}</Label>
                 <Input
-                  type="number"
-                  step="0.01"
-                  value={settleAmount}
-                  onChange={(e) => setSettleAmount(e.target.value)}
+                  type="text"
+                  inputMode="decimal"
+                  value={formatRawAmount(settleAmount, locale)}
+                  onChange={(e) => setSettleAmount(digitsToRawAmount(e.target.value))}
                   disabled={settleTxMode === 'existing'}
+                  className="text-right tabular-nums"
                 />
               </div>
               <div className="space-y-2">

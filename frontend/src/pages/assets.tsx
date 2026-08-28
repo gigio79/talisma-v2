@@ -4,6 +4,7 @@ import { useDisplayLocale, useDateLocale } from '@/hooks/use-display-locale'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useRegisterPageChatContext } from '@/lib/page-chat-context'
 import { assets, assetGroups, currencies as currenciesApi } from '@/lib/api'
+import { formatRawAmount, digitsToRawAmount } from '@/lib/format'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -1330,30 +1331,30 @@ export default function AssetsPage() {
                     <div className="space-y-2">
                       <Label>{t('assets.quantity')}</Label>
                       <Input
-                        type="number"
-                        step="any"
-                        min="0"
-                        value={formUnits}
-                        onChange={e => setFormUnits(e.target.value)}
+                        type="text"
+                        inputMode="decimal"
+                        value={formatRawAmount(formUnits, locale)}
+                        onChange={e => setFormUnits(digitsToRawAmount(e.target.value))}
                         placeholder="10"
+                        className="text-right tabular-nums"
                       />
                     </div>
                     <div className="space-y-2">
                       <Label>{t('assets.unitPrice')}</Label>
                       <Input
-                        type="number"
-                        step="any"
-                        min="0"
-                        value={formUnitPrice}
-                        onChange={e => setFormUnitPrice(e.target.value)}
+                        type="text"
+                        inputMode="decimal"
+                        value={formatRawAmount(formUnitPrice, locale)}
+                        onChange={e => setFormUnitPrice(digitsToRawAmount(e.target.value))}
                         placeholder={selectedQuote ? String(selectedQuote.price) : '0.00'}
+                        className="text-right tabular-nums"
                       />
                     </div>
                   </div>
                 ) : (
                   <div className="space-y-2">
                     <Label>{t('assets.quantity')}</Label>
-                    <Input type="number" step="any" min="0" value={formUnits} onChange={e => setFormUnits(e.target.value)} placeholder="10" />
+                    <Input type="text" inputMode="decimal" value={formatRawAmount(formUnits, locale)} onChange={e => setFormUnits(digitsToRawAmount(e.target.value))} placeholder="10" className="text-right tabular-nums" />
                   </div>
                 )}
 
@@ -1400,7 +1401,11 @@ export default function AssetsPage() {
                   <div className="space-y-2">
                     <Label>{t('assets.growthRate')}</Label>
                     <div className="relative">
-                      <Input type="number" step="any" value={formGrowthRate} onChange={e => setFormGrowthRate(e.target.value)} className={formGrowthType === 'percentage' ? 'pr-8' : ''} />
+                      {formGrowthType === 'percentage' ? (
+                        <Input type="number" step="any" value={formGrowthRate} onChange={e => setFormGrowthRate(e.target.value)} className="pr-8" />
+                      ) : (
+                        <Input type="text" inputMode="decimal" value={formatRawAmount(formGrowthRate, locale)} onChange={e => setFormGrowthRate(digitsToRawAmount(e.target.value))} className="text-right tabular-nums" />
+                      )}
                       {formGrowthType === 'percentage' && (
                         <span className="absolute right-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground pointer-events-none">%</span>
                       )}
@@ -1439,7 +1444,7 @@ export default function AssetsPage() {
               {formMethod !== 'market_price' && (
                 <div className="space-y-2">
                   <Label>{t('assets.purchasePrice')}</Label>
-                  <Input type="number" step="0.01" value={formPurchasePrice} onChange={e => setFormPurchasePrice(e.target.value)} />
+                  <Input type="text" inputMode="decimal" value={formatRawAmount(formPurchasePrice, locale)} onChange={e => setFormPurchasePrice(digitsToRawAmount(e.target.value))} className="text-right tabular-nums" />
                 </div>
               )}
             </div>
@@ -1454,7 +1459,7 @@ export default function AssetsPage() {
                 </div>
                 <div className="space-y-2">
                   <Label>{t('assets.sellPrice')}</Label>
-                  <Input type="number" step="0.01" value={formSellPrice} onChange={e => setFormSellPrice(e.target.value)} />
+                  <Input type="text" inputMode="decimal" value={formatRawAmount(formSellPrice, locale)} onChange={e => setFormSellPrice(digitsToRawAmount(e.target.value))} className="text-right tabular-nums" />
                 </div>
               </div>
             )}
@@ -1464,10 +1469,11 @@ export default function AssetsPage() {
               <div className="space-y-2">
                 <Label>{t('assets.currentValue')}</Label>
                 <Input
-                  type="number"
-                  step="any"
-                  value={formCurrentValue}
-                  onChange={e => setFormCurrentValue(e.target.value)}
+                  type="text"
+                  inputMode="decimal"
+                  value={formatRawAmount(formCurrentValue, locale)}
+                  onChange={e => setFormCurrentValue(digitsToRawAmount(e.target.value))}
+                  className="text-right tabular-nums"
                 />
               </div>
             )}
@@ -2156,12 +2162,12 @@ function AssetDetail({ assetId, currency, locale: loc, dateLocale: dateLoc, purc
         <div className="flex-1">
           <Label className="text-[11px] text-muted-foreground">{t('assets.amount')}</Label>
           <Input
-            type="number"
-            step="any"
-            value={valueAmount}
-            onChange={e => setValueAmount(e.target.value)}
+            type="text"
+            inputMode="decimal"
+            value={formatRawAmount(valueAmount, loc)}
+            onChange={e => setValueAmount(digitsToRawAmount(e.target.value))}
             placeholder="0.00"
-            className="h-8 text-sm"
+            className="h-8 text-sm text-right tabular-nums"
           />
         </div>
         <div className="w-36">
@@ -2588,18 +2594,18 @@ function AssetTransactionsTab({
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label>{t('assets.quantity')}</Label>
-                <Input type="number" step="any" min="0" value={formQuantity} onChange={(e) => setFormQuantity(e.target.value)} />
+                <Input type="text" inputMode="decimal" value={formatRawAmount(formQuantity, locale)} onChange={(e) => setFormQuantity(digitsToRawAmount(e.target.value))} className="text-right tabular-nums" />
               </div>
               <div className="space-y-2">
                 <Label>{t('assets.unitPrice')}</Label>
-                <Input type="number" step="any" min="0" value={formPrice} onChange={(e) => setFormPrice(e.target.value)} />
+                <Input type="text" inputMode="decimal" value={formatRawAmount(formPrice, locale)} onChange={(e) => setFormPrice(digitsToRawAmount(e.target.value))} className="text-right tabular-nums" />
               </div>
             </div>
 
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label>{t('assets.fee')}</Label>
-                <Input type="number" step="any" min="0" value={formFee} onChange={(e) => setFormFee(e.target.value)} placeholder="0" />
+                <Input type="text" inputMode="decimal" value={formatRawAmount(formFee, locale)} onChange={(e) => setFormFee(digitsToRawAmount(e.target.value))} placeholder="0" className="text-right tabular-nums" />
               </div>
               <div className="space-y-2">
                 <Label>{t('assets.date')}</Label>
@@ -2826,17 +2832,17 @@ function AddHoldingTransactionDialog({
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label>{t('assets.quantity')}</Label>
-              <Input type="number" step="any" min="0" value={quantity} onChange={(e) => setQuantity(e.target.value)} />
+              <Input type="text" inputMode="decimal" value={formatRawAmount(quantity, locale)} onChange={(e) => setQuantity(digitsToRawAmount(e.target.value))} className="text-right tabular-nums" />
             </div>
             <div className="space-y-2">
               <Label>{t('assets.unitPrice')}</Label>
-              <Input type="number" step="any" min="0" value={price} onChange={(e) => setPrice(e.target.value)} />
+              <Input type="text" inputMode="decimal" value={formatRawAmount(price, locale)} onChange={(e) => setPrice(digitsToRawAmount(e.target.value))} className="text-right tabular-nums" />
             </div>
           </div>
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label>{t('assets.fee')}</Label>
-              <Input type="number" step="any" min="0" value={fee} onChange={(e) => setFee(e.target.value)} placeholder="0" />
+              <Input type="text" inputMode="decimal" value={formatRawAmount(fee, locale)} onChange={(e) => setFee(digitsToRawAmount(e.target.value))} placeholder="0" className="text-right tabular-nums" />
             </div>
             <div className="space-y-2">
               <Label>{t('assets.date')}</Label>

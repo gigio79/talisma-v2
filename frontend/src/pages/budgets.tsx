@@ -1,6 +1,7 @@
 import React, { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useDisplayLocale } from '@/hooks/use-display-locale'
+import { digitsToRawAmount } from '@/lib/format'
 import { monthLabel } from '@/lib/month-utils'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { categories as categoriesApi, categoryGroups as groupsApi, budgets as budgetsApi } from '@/lib/api'
@@ -256,13 +257,13 @@ export default function BudgetsPage() {
               if (editing) {
                 updateMutation.mutate({
                   id: editing.id,
-                  amount: parseFloat(formData.get('amount') as string),
+                  amount: parseFloat(digitsToRawAmount(formData.get('amount') as string)),
                 })
               } else {
                 const isRecurring = formData.get('is_recurring') === 'on'
                 createMutation.mutate({
                   category_id: formData.get('category_id') as string,
-                  amount: parseFloat(formData.get('amount') as string),
+                  amount: parseFloat(digitsToRawAmount(formData.get('amount') as string)),
                   month: monthParam,
                   is_recurring: isRecurring,
                 })
@@ -303,9 +304,10 @@ export default function BudgetsPage() {
               <Label>{t('budgets.amount')}</Label>
               <Input
                 name="amount"
-                type="number"
-                step="0.01"
+                type="text"
+                inputMode="decimal"
                 defaultValue={editing?.amount?.toString() ?? ''}
+                className="text-right tabular-nums"
                 required
               />
             </div>

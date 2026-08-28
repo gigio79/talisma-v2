@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback } from 'react'
 import { getAccountLabel } from '@/lib/account-utils'
 import { useTranslation } from 'react-i18next'
+import { useDisplayLocale } from '@/hooks/use-display-locale'
+import { digitsToRawAmount, formatRawAmount } from '@/lib/format'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -40,6 +42,7 @@ export function TransferDialog({
   defaultFromAccountId?: string
 }) {
   const { t } = useTranslation()
+  const maskLocale = useDisplayLocale()
   const [fromAccountId, setFromAccountId] = useState(defaultFromAccountId || (accounts[0]?.id ?? ''))
   const [toAccountId, setToAccountId] = useState('')
   const [amount, setAmount] = useState('')
@@ -83,20 +86,22 @@ export function TransferDialog({
   }
 
   const handleConvertedAmountChange = (val: string) => {
-    setConvertedAmount(val)
-    if (val && amount && parseFloat(amount) > 0) {
-      setFxRate((parseFloat(val) / parseFloat(amount)).toFixed(6))
+    const raw = digitsToRawAmount(val)
+    setConvertedAmount(raw)
+    if (raw && amount && parseFloat(amount) > 0) {
+      setFxRate((parseFloat(raw) / parseFloat(amount)).toFixed(6))
     } else {
       setFxRate('')
     }
   }
 
   const handleAmountChange = (val: string) => {
-    setAmount(val)
-    if (fxRate && val) {
-      setConvertedAmount((parseFloat(val) * parseFloat(fxRate)).toFixed(2))
-    } else if (convertedAmount && val && parseFloat(val) > 0) {
-      setFxRate((parseFloat(convertedAmount) / parseFloat(val)).toFixed(6))
+    const raw = digitsToRawAmount(val)
+    setAmount(raw)
+    if (fxRate && raw) {
+      setConvertedAmount((parseFloat(raw) * parseFloat(fxRate)).toFixed(2))
+    } else if (convertedAmount && raw && parseFloat(raw) > 0) {
+      setFxRate((parseFloat(convertedAmount) / parseFloat(raw)).toFixed(6))
     }
   }
 
@@ -189,12 +194,12 @@ export function TransferDialog({
                 {fromAccount && <span className="text-muted-foreground ml-1">({fromAccount.currency})</span>}
               </Label>
               <Input
-                type="number"
-                step="0.01"
-                min="0.01"
-                value={amount}
+                type="text"
+                inputMode="decimal"
+                value={formatRawAmount(amount, maskLocale)}
                 onChange={(e) => handleAmountChange(e.target.value)}
                 required
+                className="text-right tabular-nums"
               />
             </div>
             <div className="space-y-2">
@@ -219,12 +224,12 @@ export function TransferDialog({
                     {t('transactions.convertedAmount', { currency: toAccount?.currency })}
                   </Label>
                   <Input
-                    type="number"
-                    step="0.01"
-                    min="0"
-                    value={convertedAmount}
+                    type="text"
+                    inputMode="decimal"
+                    value={formatRawAmount(convertedAmount, maskLocale)}
                     onChange={(e) => handleConvertedAmountChange(e.target.value)}
                     placeholder={t('transactions.autoCalculated')}
+                    className="text-right tabular-nums"
                   />
                 </div>
                 <div className="space-y-2">

@@ -6,6 +6,7 @@ import { useDisplayLocale, useDateLocale } from '@/hooks/use-display-locale'
 import { useQuery, useQueries, useMutation, useQueryClient } from '@tanstack/react-query'
 import { format, addDays, parseISO } from 'date-fns'
 import { accounts, transactions, categories as categoriesApi, categoryGroups as categoryGroupsApi } from '@/lib/api'
+import { formatRawAmount, digitsToRawAmount } from '@/lib/format'
 import { invalidateFinancialQueries } from '@/lib/invalidate-queries'
 import { toast } from 'sonner'
 import type { CreditCardBill, Transaction } from '@/types'
@@ -1500,6 +1501,7 @@ function CreditCardSettingsDialog({
   loading: boolean
 }) {
   const { t } = useTranslation()
+  const locale = useDisplayLocale()
   const [creditLimit, setCreditLimit] = useState('')
   const [closeDay, setCloseDay] = useState('')
   const [dueDay, setDueDay] = useState('')
@@ -1541,12 +1543,12 @@ function CreditCardSettingsDialog({
           <div className="space-y-2">
             <Label>{t('accounts.creditLimit')}</Label>
             <Input
-              type="number"
-              step="0.01"
-              min="0"
-              value={creditLimit}
-              onChange={(e) => setCreditLimit(e.target.value)}
+              type="text"
+              inputMode="decimal"
+              value={formatRawAmount(creditLimit, locale)}
+              onChange={(e) => setCreditLimit(digitsToRawAmount(e.target.value))}
               placeholder="0.00"
+              className="text-right tabular-nums"
             />
           </div>
           <div className="grid grid-cols-2 gap-4">

@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { getAccountLabel } from '@/lib/account-utils'
 import { useTranslation } from 'react-i18next'
-import { useDateLocale } from '@/hooks/use-display-locale'
+import { useDateLocale, useDisplayLocale } from '@/hooks/use-display-locale'
+import { digitsToRawAmount, formatRawAmount } from '@/lib/format'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useAuth } from '@/contexts/auth-context'
 import { currencies as currenciesApi, transactions as transactionsApi, settings as settingsApi, payees as payeesApi, rules as rulesApi } from '@/lib/api'
@@ -374,6 +375,7 @@ function TransactionForm({
   const { privacyMode, MASK } = usePrivacyMode()
   const userCurrency = user?.preferences?.currency_display ?? 'USD'
   const dateLocale = useDateLocale()
+  const maskLocale = useDisplayLocale()
   const { data: supportedCurrencies } = useQuery({
     queryKey: ['currencies'],
     queryFn: currenciesApi.list,
@@ -606,12 +608,13 @@ function TransactionForm({
   }
 
   const handleConvertedAmountChange = (val: string) => {
-    setConvertedAmount(val)
-    const numVal = parseFloat(val)
+    const raw = digitsToRawAmount(val)
+    setConvertedAmount(raw)
+    const numVal = parseFloat(raw)
     const numAmount = parseFloat(amount)
     if (numVal && numAmount) {
       setFxRate((numVal / numAmount).toString())
-    } else if (!val) {
+    } else if (!raw) {
       setFxRate('')
     }
   }
@@ -628,8 +631,9 @@ function TransactionForm({
   }
 
   const handleAmountChange = (val: string) => {
-    setAmount(val)
-    const numAmount = parseFloat(val)
+    const raw = digitsToRawAmount(val)
+    setAmount(raw)
+    const numAmount = parseFloat(raw)
     const numRate = parseFloat(fxRate)
     if (numRate && numAmount) {
       setConvertedAmount((numAmount * numRate).toFixed(2))
@@ -843,18 +847,21 @@ function TransactionForm({
             />
           ) : (
             <Input
-              type="number"
-              step="0.01"
+              type="text"
+              inputMode="decimal"
               value={
                 isInstallment && installmentTotal && parseInt(installmentCount, 10) >= 2
-                  ? (parseFloat(installmentTotal) / parseInt(installmentCount, 10)).toFixed(2)
-                  : amount
+                  ? formatRawAmount(
+                      (parseFloat(installmentTotal) / parseInt(installmentCount, 10)).toFixed(2),
+                      maskLocale,
+                    )
+                  : formatRawAmount(amount, maskLocale)
               }
               onChange={(e) => handleAmountChange(e.target.value)}
               required
               disabled={isSynced}
               readOnly={isInstallment}
-              className={isInstallment ? 'bg-muted/40 text-muted-foreground cursor-default' : ''}
+              className={`text-right tabular-nums${isInstallment ? ' bg-muted/40 text-muted-foreground cursor-default' : ''}`}
             />
           )}
         </div>
@@ -906,11 +913,12 @@ function TransactionForm({
                 />
               ) : (
                 <Input
-                  type="number"
-                  step="0.01"
-                  value={convertedAmount}
+                  type="text"
+                  inputMode="decimal"
+                  value={formatRawAmount(convertedAmount, maskLocale)}
                   onChange={(e) => handleConvertedAmountChange(e.target.value)}
                   placeholder={t('transactions.autoCalculated')}
+                  className="text-right tabular-nums"
                 />
               )}
             </div>
@@ -1085,12 +1093,12 @@ function TransactionForm({
                   <div className="space-y-2">
                     <Label>{t('transactions.installmentTotal', 'Valor total')}</Label>
                     <Input
-                      type="number"
-                      step="0.01"
-                      min="0"
-                      value={installmentTotal}
-                      onChange={(e) => setInstallmentTotal(e.target.value)}
-                      placeholder="0.00"
+                      type="text"
+                      inputMode="decimal"
+                      value={formatRawAmount(installmentTotal, maskLocale)}
+                      onChange={(e) => setInstallmentTotal(digitsToRawAmount(e.target.value))}
+                      placeholder="0,00"
+                      className="text-right tabular-nums"
                     />
                   </div>
                   <div className="space-y-2">

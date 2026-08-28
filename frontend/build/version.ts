@@ -1,7 +1,7 @@
 import { execSync, execFileSync } from 'node:child_process'
-const officialReleaseRepo = 'https://github.com/securo-finance/securo.git'
+const officialReleaseRepo = 'https://github.com/gigio79/talisma-v2.git'
 const officialLatestReleaseApi =
-  'https://api.github.com/repos/securo-finance/securo/releases/latest'
+  'https://api.github.com/repos/gigio79/talisma-v2/releases/latest'
 const semverPattern =
   /^v?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/
 

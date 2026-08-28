@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { getAccountName } from '@/lib/account-utils'
+import { useDisplayLocale } from '@/hooks/use-display-locale'
+import { formatRawAmount, digitsToRawAmount } from '@/lib/format'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Button } from '@/components/ui/button'
@@ -79,6 +81,7 @@ export function RuleDialog({
   initialData?: RuleDialogInitialData
 }) {
   const { t } = useTranslation()
+  const locale = useDisplayLocale()
 
   const defaultConditions: RuleCondition[] = initialData?.conditions ?? rule?.conditions as RuleCondition[] ?? [{ field: 'description', op: 'contains', value: '' }]
   const defaultActions: RuleAction[] = initialData?.actions ?? rule?.actions as RuleAction[] ?? [{ op: 'set_category', value: '' }]
@@ -232,11 +235,12 @@ export function RuleDialog({
                     </select>
                   ) : (
                     <Input
-                      className="w-0 flex-1 min-w-0 h-8 text-sm"
-                      value={String(cond.value)}
-                      onChange={(e) => updateCondition(i, 'value', e.target.value)}
+                      className={cn('w-0 flex-1 min-w-0 h-8 text-sm', cond.field === 'amount' && 'text-right tabular-nums')}
+                      value={cond.field === 'amount' ? formatRawAmount(String(cond.value), locale) : String(cond.value)}
+                      onChange={(e) => updateCondition(i, 'value', cond.field === 'amount' ? digitsToRawAmount(e.target.value) : e.target.value)}
                       placeholder={cond.field === 'amount' ? '0.00' : cond.field === 'date' ? 'YYYY-MM-DD' : t('rules.valuePlaceholder')}
-                      type={cond.field === 'amount' ? 'number' : cond.field === 'date' ? 'date' : 'text'}
+                      type={cond.field === 'amount' ? 'text' : cond.field === 'date' ? 'date' : 'text'}
+                      inputMode={cond.field === 'amount' ? 'decimal' : undefined}
                     />
                   )}
                   <button

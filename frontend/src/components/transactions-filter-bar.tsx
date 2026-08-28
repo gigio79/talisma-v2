@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { getAccountName } from '@/lib/account-utils'
 import { useTranslation } from 'react-i18next'
 import { useDisplayLocale, useDateLocale } from '@/hooks/use-display-locale'
+import { digitsToRawAmount, formatRawAmount } from '@/lib/format'
 import { format, startOfMonth, startOfYear, subDays } from 'date-fns'
 import {
   ArrowUpDown,
@@ -585,20 +586,18 @@ export function TransactionsFilterBar({
             {t('transactions.filtersBar.amountMinLabel')}
           </label>
           <input
-            type="number"
+            type="text"
             inputMode="decimal"
-            min={0}
-            step="0.01"
-            placeholder="0.00"
-            value={draftMinAmount}
-            onChange={(e) => setDraftMinAmount(e.target.value)}
+            placeholder="0,00"
+            value={formatRawAmount(draftMinAmount, locale)}
+            onChange={(e) => setDraftMinAmount(digitsToRawAmount(e.target.value))}
             onKeyDown={(e) => {
               if (e.key === 'Enter') {
                 e.preventDefault()
                 applyAmountRange()
               }
             }}
-            className="h-8 w-full rounded-md border border-border bg-background px-2 text-[13px] outline-none focus:border-primary/60 focus:ring-[2px] focus:ring-primary/15"
+            className="h-8 w-full rounded-md border border-border bg-background px-2 text-[13px] text-right tabular-nums outline-none focus:border-primary/60 focus:ring-[2px] focus:ring-primary/15"
           />
         </div>
         <div className="flex-1">
@@ -606,20 +605,18 @@ export function TransactionsFilterBar({
             {t('transactions.filtersBar.amountMaxLabel')}
           </label>
           <input
-            type="number"
+            type="text"
             inputMode="decimal"
-            min={0}
-            step="0.01"
-            placeholder="0.00"
-            value={draftMaxAmount}
-            onChange={(e) => setDraftMaxAmount(e.target.value)}
+            placeholder="0,00"
+            value={formatRawAmount(draftMaxAmount, locale)}
+            onChange={(e) => setDraftMaxAmount(digitsToRawAmount(e.target.value))}
             onKeyDown={(e) => {
               if (e.key === 'Enter') {
                 e.preventDefault()
                 applyAmountRange()
               }
             }}
-            className="h-8 w-full rounded-md border border-border bg-background px-2 text-[13px] outline-none focus:border-primary/60 focus:ring-[2px] focus:ring-primary/15"
+            className="h-8 w-full rounded-md border border-border bg-background px-2 text-[13px] text-right tabular-nums outline-none focus:border-primary/60 focus:ring-[2px] focus:ring-primary/15"
           />
         </div>
       </div>

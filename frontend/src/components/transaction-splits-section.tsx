@@ -6,7 +6,7 @@ import { Users } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { groups as groupsApi, type GroupCreatePayload } from '@/lib/api'
-import { formatCurrency } from '@/lib/format'
+import { formatCurrency, formatRawAmount, digitsToRawAmount } from '@/lib/format'
 import type { Group, GroupKind, ShareType, TransactionSplitsInput } from '@/types'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -444,11 +444,11 @@ export function TransactionSplitsSection({
                             )}
                             {shareType === 'exact' && row.selected && (
                               <Input
-                                type="number"
-                                step="0.01"
-                                className="w-24 h-8 text-sm"
-                                value={row.amount}
-                                onChange={(e) => updateRow(m.id, { amount: e.target.value })}
+                                type="text"
+                                inputMode="decimal"
+                                className="w-24 h-8 text-sm text-right tabular-nums"
+                                value={formatRawAmount(row.amount, locale)}
+                                onChange={(e) => updateRow(m.id, { amount: digitsToRawAmount(e.target.value) })}
                               />
                             )}
                             {shareType === 'percent' && row.selected && (

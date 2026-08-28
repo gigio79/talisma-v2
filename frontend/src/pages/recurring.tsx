@@ -2,6 +2,7 @@ import React, { useState } from 'react'
 import { getAccountName } from '@/lib/account-utils'
 import { useTranslation } from 'react-i18next'
 import { useDisplayLocale, useDateLocale } from '@/hooks/use-display-locale'
+import { formatRawAmount, digitsToRawAmount } from '@/lib/format'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { categories as categoriesApi, categoryGroups as categoryGroupsApi, recurring as recurringApi, accounts as accountsApi, currencies as currenciesApi } from '@/lib/api'
 import { invalidateFinancialQueries } from '@/lib/invalidate-queries'
@@ -294,6 +295,7 @@ function RecurringForm({
 }) {
   const { t } = useTranslation()
   const { user } = useAuth()
+  const locale = useDisplayLocale()
   const userCurrency = user?.preferences?.currency_display ?? 'USD'
   const { data: supportedCurrencies } = useQuery({
     queryKey: ['currencies'],
@@ -344,7 +346,7 @@ function RecurringForm({
       <div className="grid grid-cols-3 gap-4">
         <div className="space-y-2">
           <Label>{t('recurring.amount')}</Label>
-          <Input type="number" step="0.01" value={amount} onChange={(e) => setAmount(e.target.value)} required />
+          <Input type="text" inputMode="decimal" value={formatRawAmount(amount, locale)} onChange={(e) => setAmount(digitsToRawAmount(e.target.value))} className="text-right tabular-nums" required />
         </div>
         <div className="space-y-2">
           <Label>{t('recurring.currency')}</Label>
